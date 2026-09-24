@@ -535,10 +535,17 @@ public enum Planner {
         } else if !components[0].contains("."), !components[0].contains(":"), components[0] != "localhost" {
             components.insert("docker.io", at: 0)
         }
-        let last = components[components.count - 1]
-        if !last.contains(":"), !last.contains("@") {
-            components[components.count - 1] = "\(last):latest"
+        var last = components[components.count - 1]
+        // A digest names the content exactly and the tag beside it is only a label, so it is
+        // dropped, which is how the runtime stores an image pulled by `name:tag@digest`.
+        // Only the last component can carry a tag: a colon earlier is a registry port.
+        if let at = last.firstIndex(of: "@") {
+            let name = last[..<at]
+            last = String(name.split(separator: ":", maxSplits: 1).first ?? name) + last[at...]
+        } else if !last.contains(":") {
+            last = "\(last):latest"
         }
+        components[components.count - 1] = last
         return components.joined(separator: "/")
     }
 
