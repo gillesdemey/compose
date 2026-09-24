@@ -265,6 +265,21 @@ struct CreateOperationTests {
         #expect(Planner.processArguments(imageEntrypoint: nil, imageCmd: ["nginx"], command: []) == ["nginx"])
         #expect(Planner.processArguments(imageEntrypoint: nil, imageCmd: ["nginx"], command: ["sleep"]) == ["sleep"])
         #expect(Planner.processArguments(imageEntrypoint: nil, imageCmd: nil, command: []).isEmpty)
+        // An entrypoint from the file replaces the image's, and takes the image's cmd with it,
+        // because that cmd was written as arguments to the program being replaced.
+        #expect(
+            Planner.processArguments(imageEntrypoint: ["/entry.sh"], imageCmd: ["server"], entrypoint: ["/bin/sh", "-c"], command: [])
+                == ["/bin/sh", "-c"]
+        )
+        #expect(
+            Planner.processArguments(imageEntrypoint: ["/entry.sh"], imageCmd: ["server"], entrypoint: ["/bin/sh", "-c"], command: ["echo hi"])
+                == ["/bin/sh", "-c", "echo hi"]
+        )
+        // An empty one clears the image's entrypoint and leaves its cmd to run on its own.
+        #expect(
+            Planner.processArguments(imageEntrypoint: ["/entry.sh"], imageCmd: ["server"], entrypoint: [], command: [])
+                == ["server"]
+        )
     }
 
     @Test("The networks a plan will create are the ones a front end can name in advance")
@@ -354,6 +369,11 @@ struct CreateOperationTests {
                 volumes:
                   - ./data:/var/lib/postgresql/data
                   - ./seed:/seed:ro
+                  - type: tmpfs
+                    target: /cache
+                    read_only: true
+                    tmpfs: { size: 64m, mode: 1777 }
+                tmpfs: ["/run:size=8m,noexec"]
                 working_dir: /srv
                 deploy:
                   resources:
@@ -367,6 +387,11 @@ struct CreateOperationTests {
         #expect(create.mounts == [
             CreateOperation.Mount(hostPath: "/project/data", containerPath: "/var/lib/postgresql/data", readOnly: false),
             CreateOperation.Mount(hostPath: "/project/seed", containerPath: "/seed", readOnly: true),
+        ])
+        // Both tmpfs forms end up as guest mount options, the read-only flag among them.
+        #expect(create.tmpfs == [
+            CreateOperation.Tmpfs(containerPath: "/cache", options: ["size=64m", "mode=1777", "ro"]),
+            CreateOperation.Tmpfs(containerPath: "/run", options: ["size=8m", "noexec"]),
         ])
         #expect(create.workingDirectory == "/srv")
         #expect(create.cpus == 0.5)

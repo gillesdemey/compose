@@ -519,28 +519,32 @@ public enum Planner {
         }
     }
 
-    /// Image entrypoint, image cmd and the file's `command`, folded into the argument vector a
-    /// container is created with.
+    /// Image entrypoint, image cmd, and the file's `entrypoint` and `command`, folded into the
+    /// argument vector a container is created with.
     ///
-    /// `command:` replaces the image's cmd and leaves its entrypoint alone, which is what the
-    /// key means in compose and what the image's own config says. It lives here rather than in
-    /// whatever executes the plan because it is a decision, and because the alternative is two
-    /// front ends folding arguments slightly differently.
+    /// `command:` replaces the image's cmd and leaves its entrypoint alone. `entrypoint:`
+    /// replaces the image's entrypoint and, when it names one, drops the image's cmd with it:
+    /// that cmd was written as arguments to a different program. An empty `entrypoint:`
+    /// clears the image's and keeps its cmd. That is how Docker folds them, and compose leaves
+    /// the folding to Docker. It lives here rather than in whatever executes the plan because
+    /// it is a decision, and because the alternative is two front ends folding arguments
+    /// slightly differently.
     public static func processArguments(
         imageEntrypoint: [String]?,
         imageCmd: [String]?,
+        entrypoint: [String]? = nil,
         command: [String]
     ) -> [String] {
-        var arguments: [String] = []
-        if let imageEntrypoint, !imageEntrypoint.isEmpty {
-            arguments = imageEntrypoint
+        let program: [String]
+        let defaultArguments: [String]
+        if let entrypoint {
+            program = entrypoint
+            defaultArguments = entrypoint.isEmpty ? imageCmd ?? [] : []
+        } else {
+            program = imageEntrypoint ?? []
+            defaultArguments = imageCmd ?? []
         }
-        if !command.isEmpty {
-            arguments.append(contentsOf: command)
-        } else if let imageCmd, !imageCmd.isEmpty {
-            arguments.append(contentsOf: imageCmd)
-        }
-        return arguments
+        return program + (command.isEmpty ? defaultArguments : command)
     }
 
     // MARK: - Create
@@ -553,15 +557,16 @@ public enum Planner {
         project: ProjectIdentity
     ) -> CreateOperation {
         var mounts: [CreateOperation.Mount] = []
+        var tmpfs: [CreateOperation.Tmpfs] = []
         for mount in service.mounts {
-            guard case .bind(let hostPath) = mount.source else { continue }
-            mounts.append(
-                CreateOperation.Mount(
-                    hostPath: hostPath,
-                    containerPath: mount.target,
-                    readOnly: mount.readOnly
-                )
-            )
+            switch mount.source {
+            case .bind(let hostPath):
+                mounts.append(CreateOperation.Mount(hostPath: hostPath, containerPath: mount.target, readOnly: mount.readOnly))
+            case .tmpfs(let options):
+                tmpfs.append(CreateOperation.Tmpfs(containerPath: mount.target, options: options + (mount.readOnly ? ["ro"] : [])))
+            case .named, .anonymous:
+                continue
+            }
         }
         let ports = service.ports.compactMap { port -> CreateOperation.Port? in
             guard let hostPort = port.hostPort else { return nil }
@@ -578,8 +583,11 @@ public enum Planner {
             imageReference: imageReference,
             environment: service.environment.map { "\($0.key)=\($0.value)" }.sorted(),
             command: service.command,
+            entrypoint: service.entrypoint,
+            user: service.user,
             workingDirectory: service.workingDirectory,
             mounts: mounts,
+            tmpfs: tmpfs,
             ports: ports,
             networkName: networkName,
             labels: project.labels(for: service),

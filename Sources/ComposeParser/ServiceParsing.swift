@@ -38,6 +38,13 @@ extension FileParser {
                 layer.containerName = container
             case "command":
                 layer.command = try parseCommand(valueNode, path: "\(base).command")
+            case "entrypoint":
+                // `null` leaves the image's alone; an empty string or list clears it.
+                layer.entrypoint = valueNode.null != nil ? nil : try parseCommand(valueNode, path: "\(base).entrypoint")
+            case "user":
+                layer.user = try string(valueNode, path: "\(base).user")
+            case "tmpfs":
+                layer.mounts += try parseTmpfs(valueNode, path: "\(base).tmpfs")
             case "environment":
                 for pair in try parseEnvironment(valueNode, path: "\(base).environment") {
                     layer.environment[pair.key] = pair.value
@@ -49,7 +56,7 @@ extension FileParser {
             case "ports":
                 layer.ports = try parsePorts(valueNode, service: name, path: "\(base).ports")
             case "volumes":
-                layer.mounts = try parseMounts(valueNode, service: name, path: "\(base).volumes")
+                layer.mounts += try parseMounts(valueNode, service: name, path: "\(base).volumes")
             case "labels":
                 layer.labels = try parseLabels(valueNode, service: name, path: "\(base).labels")
             case "networks":
@@ -416,7 +423,7 @@ extension FileParser {
             }
             guard let mount else { continue }
             switch mount.source {
-            case .bind:
+            case .bind, .tmpfs:
                 break
             case .named(let name):
                 noteForm(
@@ -488,6 +495,7 @@ extension FileParser {
         var source: String?
         var target: String?
         var readOnly = false
+        var tmpfsOptions: [String] = []
         for (keyNode, valueNode) in try mapping(node, path: path) {
             let key = keyNode.scalar?.string ?? ""
             switch key {
@@ -495,6 +503,7 @@ extension FileParser {
             case "source": source = try string(valueNode, path: "\(path).source")
             case "target": target = try string(valueNode, path: "\(path).target")
             case "read_only": readOnly = valueNode.bool ?? false
+            case "tmpfs": tmpfsOptions = try parseTmpfsSettings(valueNode, service: service, path: "\(path).tmpfs")
             default:
                 if KeySupportTable.isExtensionKey(key) { continue }
                 note(
@@ -524,6 +533,11 @@ extension FileParser {
                 target: target,
                 readOnly: readOnly
             )
+        case "tmpfs":
+            if source != nil {
+                throw ParseError(reason: .invalidValue, problem: "a tmpfs mount has no `source`", mark: mark(node), path: path)
+            }
+            return Service.Mount(source: .tmpfs(options: tmpfsOptions), target: target, readOnly: readOnly)
         default:
             note(
                 key: "volumes.type",
@@ -533,6 +547,41 @@ extension FileParser {
             )
             return nil
         }
+    }
+
+    /// The service-level `tmpfs:`, a path or a list of them, each with options after a colon
+    /// as `--tmpfs` takes them: `/run:size=64m,noexec`.
+    private mutating func parseTmpfs(_ node: Node, path: String) throws -> [Service.Mount] {
+        try parseStringOrList(node, path: path).map { entry in
+            let parts = entry.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            let target = String(parts[0])
+            guard target.hasPrefix("/") else {
+                throw ParseError(reason: .invalidValue, problem: "`\(entry)` is not an absolute container path", mark: mark(node), path: path)
+            }
+            let options = parts.count == 2 ? parts[1].split(separator: ",").map(String.init) : []
+            // `ro` and `rw` are the read-only flag every other mount has, not tmpfs options.
+            return Service.Mount(
+                source: .tmpfs(options: options.filter { $0 != "ro" && $0 != "rw" }),
+                target: target,
+                readOnly: options.contains("ro")
+            )
+        }
+    }
+
+    /// `tmpfs:` under a long-form mount: a size in bytes or with a unit, and an octal mode.
+    private mutating func parseTmpfsSettings(_ node: Node, service: String, path: String) throws -> [String] {
+        var options: [String] = []
+        for (keyNode, valueNode) in try mapping(node, path: path) {
+            let key = keyNode.scalar?.string ?? ""
+            switch key {
+            case "size": options.append("size=\(try string(valueNode, path: "\(path).size"))")
+            case "mode": options.append("mode=\(try string(valueNode, path: "\(path).mode"))")
+            default:
+                if KeySupportTable.isExtensionKey(key) { continue }
+                noteUnknown(key: "volumes.tmpfs.\(key)", service: service, node: keyNode)
+            }
+        }
+        return options
     }
 
     // MARK: - resolver

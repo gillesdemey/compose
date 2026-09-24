@@ -79,13 +79,24 @@ public enum ComposeFileRenderer {
         if !service.dns.isEmpty { pairs.append(("dns", strings(service.dns))) }
         if !service.dnsOptions.isEmpty { pairs.append(("dns_opt", strings(service.dnsOptions))) }
         if !service.dnsSearch.isEmpty { pairs.append(("dns_search", strings(service.dnsSearch))) }
+        if let entrypoint = service.entrypoint { pairs.append(("entrypoint", strings(entrypoint))) }
         if !service.environment.isEmpty { pairs.append(("environment", stringMap(service.environment))) }
         if let image = service.image { pairs.append(("image", string(image))) }
         if !service.labels.isEmpty { pairs.append(("labels", stringMap(service.labels))) }
         let networks = service.networks.isEmpty ? ["default"] : service.networks
         pairs.append(("networks", mapping(networks.map { ($0, null) })))
         if !service.ports.isEmpty { pairs.append(("ports", .sequence(.init(service.ports.map(node(for:)))))) }
-        if !service.mounts.isEmpty { pairs.append(("volumes", .sequence(.init(service.mounts.map(node(for:)))))) }
+        // Every tmpfs mount goes in the service-level list, whichever form the file used: the
+        // long form has no place for options other than a size and a mode.
+        let tmpfs = service.mounts.compactMap { mount -> String? in
+            guard case .tmpfs(let options) = mount.source else { return nil }
+            let all = options + (mount.readOnly ? ["ro"] : [])
+            return all.isEmpty ? mount.target : "\(mount.target):\(all.joined(separator: ","))"
+        }
+        if !tmpfs.isEmpty { pairs.append(("tmpfs", strings(tmpfs))) }
+        if let user = service.user { pairs.append(("user", string(user))) }
+        let volumes = service.mounts.filter { if case .tmpfs = $0.source { return false } else { return true } }
+        if !volumes.isEmpty { pairs.append(("volumes", .sequence(.init(volumes.map(node(for:)))))) }
         if let workingDirectory = service.workingDirectory { pairs.append(("working_dir", string(workingDirectory))) }
         pairs.append(contentsOf: extensions(service.extensions))
         return mapping(pairs)
@@ -108,6 +119,7 @@ public enum ComposeFileRenderer {
         case .bind(let path): fields = [("type", string("bind")), ("source", string(path))]
         case .named(let name): fields = [("type", string("volume")), ("source", string(name))]
         case .anonymous: fields = [("type", string("volume"))]
+        case .tmpfs: fields = [("type", string("tmpfs"))]
         }
         fields.append(("target", string(mount.target)))
         if mount.readOnly { fields.append(("read_only", boolean(true))) }

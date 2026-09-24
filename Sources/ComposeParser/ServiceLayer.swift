@@ -29,6 +29,8 @@ struct ServiceLayer {
     var build: Build?
     var containerName: String?
     var command: [String]?
+    var entrypoint: [String]?
+    var user: String?
     var workingDirectory: String?
     /// In file order, because a later file in the list wins.
     var fromEnvFiles: [(key: String, value: String)] = []
@@ -68,6 +70,8 @@ struct ServiceLayer {
         result.containerName = over.containerName ?? containerName
         // Replaced, never appended: a command is one thing, not a list of things.
         result.command = over.command ?? command
+        result.entrypoint = over.entrypoint ?? entrypoint
+        result.user = over.user ?? user
         result.workingDirectory = over.workingDirectory ?? workingDirectory
         result.fromEnvFiles = fromEnvFiles + over.fromEnvFiles
         result.environment = environment.merging(over.environment) { $1 }
@@ -262,6 +266,8 @@ extension FileParser {
             },
             containerName: layer.containerName,
             command: layer.command ?? [],
+            entrypoint: layer.entrypoint,
+            user: layer.user,
             environment: environment,
             workingDirectory: layer.workingDirectory,
             ports: layer.ports,

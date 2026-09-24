@@ -61,6 +61,9 @@ public struct Service: Sendable, Hashable, Identifiable {
             case named(String)
             /// No source at all, which compose fills in with a volume it invents.
             case anonymous
+            /// Memory-backed, gone when the container stops. The options are the mount options
+            /// as the guest's `mount` takes them: `size=64m`, `mode=1777`, `noexec`.
+            case tmpfs(options: [String])
         }
 
         public var source: Source
@@ -79,6 +82,9 @@ public struct Service: Sendable, Hashable, Identifiable {
             case .bind(let path): prefix = path
             case .named(let name): prefix = name
             case .anonymous: prefix = ""
+            // Bracketed, because a named volume may be called `tmpfs` and must not describe,
+            // and so hash, the same.
+            case .tmpfs(let options): prefix = "<tmpfs\(options.isEmpty ? "" : " " + options.joined(separator: ","))>"
             }
             return "\(prefix):\(target)\(readOnly ? ":ro" : "")"
         }
@@ -106,6 +112,10 @@ public struct Service: Sendable, Hashable, Identifiable {
     public var build: Build?
     public var containerName: String?
     public var command: [String]
+    /// `nil` keeps the image's entrypoint. Empty clears it, which is not the same thing.
+    public var entrypoint: [String]?
+    /// `name|uid[:gid]`, as the guest resolves it. `nil` keeps the image's user.
+    public var user: String?
     public var environment: [String: String]
     public var workingDirectory: String?
     public var ports: [Port]
@@ -129,6 +139,8 @@ public struct Service: Sendable, Hashable, Identifiable {
         build: Build? = nil,
         containerName: String? = nil,
         command: [String] = [],
+        entrypoint: [String]? = nil,
+        user: String? = nil,
         environment: [String: String] = [:],
         workingDirectory: String? = nil,
         ports: [Port] = [],
@@ -147,6 +159,8 @@ public struct Service: Sendable, Hashable, Identifiable {
         self.build = build
         self.containerName = containerName
         self.command = command
+        self.entrypoint = entrypoint
+        self.user = user
         self.environment = environment
         self.workingDirectory = workingDirectory
         self.ports = ports
@@ -184,6 +198,9 @@ extension Service {
         }
         if let containerName { lines.append("container_name=\(containerName)") }
         if !command.isEmpty { lines.append("command=\(command.joined(separator: "\u{1}"))") }
+        // Both only when set, so a container made before either was read keeps its hash.
+        if let entrypoint { lines.append("entrypoint=[\(entrypoint.joined(separator: "\u{1}"))]") }
+        if let user { lines.append("user=\(user)") }
         for key in environment.keys.sorted() {
             lines.append("env.\(key)=\(environment[key] ?? "")")
         }

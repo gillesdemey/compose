@@ -2,8 +2,8 @@ services:
   app:
     image: app:latest
     restart: always
-    user: "1000:1000"
-    entrypoint: /bin/sh
+    cap_add: [NET_ADMIN]
+    profiles: [debug]
     platform: linux/arm64
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost"]
