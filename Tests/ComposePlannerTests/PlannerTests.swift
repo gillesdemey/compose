@@ -375,6 +375,29 @@ struct CreateOperationTests {
         #expect(
             Planner.normalisedImageReference("alpine@sha256:abc") == "docker.io/library/alpine@sha256:abc"
         )
+        // Pinned: the digest decides and the tag is dropped, as the runtime stores it. A port
+        // in the registry is not a tag.
+        #expect(
+            Planner.normalisedImageReference("prom/alertmanager:v0.32.1@sha256:abc")
+                == "docker.io/prom/alertmanager@sha256:abc"
+        )
+        #expect(
+            Planner.normalisedImageReference("localhost:5000/thing:1@sha256:abc") == "localhost:5000/thing@sha256:abc"
+        )
+    }
+
+    @Test("A pinned image the runtime already has is not pulled again")
+    func pinnedImagesAreRecognised() throws {
+        let file = try Sample.file("services:\n  web:\n    image: minio/mc:RELEASE.1@sha256:abc\n")
+        let present = CurrentState(images: ["docker.io/minio/mc@sha256:abc"])
+        #expect(!(try Planner.up(file: file, project: Sample.project, state: present)).operations.contains {
+            $0.summary.hasPrefix("pull")
+        })
+        // Same tag, different content: still pulled.
+        let other = CurrentState(images: ["docker.io/minio/mc@sha256:def", "docker.io/minio/mc:RELEASE.1"])
+        #expect((try Planner.up(file: file, project: Sample.project, state: other)).operations.contains {
+            $0.summary.hasPrefix("pull")
+        })
     }
 
     @Test("An image the runtime already has under its long name is not pulled again")
