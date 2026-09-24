@@ -109,15 +109,23 @@ Then, in a directory with a `compose.yaml`:
 container compose up                 # create and start everything, in dependency order
 container compose up --dry-run       # work out the plan, print it, change nothing
 container compose down               # stop and remove it all again
+container compose config             # print the project as it will be run
 ```
 
-`up` and `down`, matching compose. There are no other verbs yet: container's own `ls`,
-`logs` and `exec` cover the rest meanwhile.
+`up`, `down` and `config`, matching compose. There are no other verbs yet: container's own
+`ls`, `logs` and `exec` cover the rest meanwhile.
 
-Both verbs take `-f` to point at a file elsewhere, `-p` to name the project (it otherwise
-comes from the file's `name`, then from the directory), and `--dry-run`. `up` also takes
-`--force-recreate`, `--pull missing|always|never` and `--keep-orphans`; `down` takes
-`--keep-networks`.
+Every verb takes `-f` to point at a file elsewhere and `-p` to name the project (it otherwise
+comes from the file's `name`, then from the directory). `up` and `down` take `--dry-run`. `up`
+also takes `--force-recreate`, `--pull missing|always|never` and `--keep-orphans`; `down` takes
+`--keep-networks`; `config` takes `--services` to print only the service names.
+
+`config` prints the project the way `docker compose config` does, as a compose file with
+variables substituted, `env_file` merged in, paths absolute, short forms expanded and the
+default network written out. It prints what this will act on, which is not always everything
+the file asked for: a key it cannot honour is missing from the output and listed on stderr
+instead, and `config` never refuses. Its output reads back as a compose file, to this and to
+compose.
 
 Running `up` twice is the interesting case. The second run compares each service against the
 hash stamped on the container it produced, and creates, starts, leaves alone, recreates or

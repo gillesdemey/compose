@@ -15,11 +15,11 @@ struct Compose: AsyncParsableCommand {
         commandName: "compose",
         abstract: "Bring a set of services up and down from a compose file.",
         version: composeVersion,
-        subcommands: [Up.self, Down.self]
+        subcommands: [Up.self, Down.self, Config.self]
     )
 }
 
-/// The options both verbs take.
+/// The options every verb takes.
 struct CommonOptions: ParsableArguments {
     @Option(
         name: [.short, .customLong("file")],
@@ -35,9 +35,6 @@ struct CommonOptions: ParsableArguments {
         )
     )
     var projectName: String?
-
-    @Flag(name: .long, help: "Work out the plan, print it, and change nothing.")
-    var dryRun = false
 }
 
 struct Up: AsyncParsableCommand {
@@ -46,6 +43,9 @@ struct Up: AsyncParsableCommand {
     )
 
     @OptionGroup var common: CommonOptions
+
+    @Flag(name: .long, help: "Work out the plan, print it, and change nothing.")
+    var dryRun = false
 
     @Flag(name: .long, help: "Recreate every container, whether or not its service changed.")
     var forceRecreate = false
@@ -83,7 +83,7 @@ struct Up: AsyncParsableCommand {
             Output.line("Everything is already up to date.")
             return
         }
-        guard !common.dryRun else {
+        guard !dryRun else {
             Report.dryRun(plan)
             return
         }
@@ -97,6 +97,9 @@ struct Down: AsyncParsableCommand {
     )
 
     @OptionGroup var common: CommonOptions
+
+    @Flag(name: .long, help: "Work out the plan, print it, and change nothing.")
+    var dryRun = false
 
     @Flag(name: .long, help: "Leave the networks this project created in place.")
     var keepNetworks = false
@@ -125,11 +128,47 @@ struct Down: AsyncParsableCommand {
             Output.line("Nothing of this project is running.")
             return
         }
-        guard !common.dryRun else {
+        guard !dryRun else {
             Report.dryRun(plan)
             return
         }
         try await Runtime.execute(plan)
+    }
+}
+
+struct Config: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        abstract: "Print the project as it will be run: includes and extends merged, variables substituted, paths resolved."
+    )
+
+    @OptionGroup var common: CommonOptions
+
+    @Flag(name: .long, help: "Print the service names, one per line.")
+    var services = false
+
+    func run() async throws {
+        let project = try ProjectLoader.load(common)
+
+        // Nothing is about to run, so nothing here refuses. What the file asked for and will
+        // not get is still said, on stderr, because it is missing from what is printed.
+        for warning in project.result.interpolationWarnings {
+            Output.warningToStandardError(warning.message)
+        }
+        let findings = project.result.findings
+        if !findings.isEmpty {
+            let count = findings.count
+            Output.warningToStandardError(
+                "\(count) key\(count == 1 ? " is" : "s are") left out, because this cannot honour \(count == 1 ? "it" : "them")",
+                details: findings.map(\.message)
+            )
+        }
+
+        if services {
+            for service in project.file.orderedServices { Output.line(service.name) }
+            return
+        }
+        let yaml = try ComposeFileRenderer.yaml(for: project.file, projectName: project.identity.name)
+        FileHandle.standardOutput.write(Data(yaml.utf8))
     }
 }
 

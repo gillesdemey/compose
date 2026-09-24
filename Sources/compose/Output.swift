@@ -50,6 +50,15 @@ enum Output {
             FileHandle.standardError.write(Data("  \(detail)\n".utf8))
         }
     }
+
+    /// A warning for a command whose stdout is data, such as `config`, where anything else
+    /// written there would corrupt what a pipe receives.
+    static func warningToStandardError(_ text: String, details: [String] = []) {
+        FileHandle.standardError.write(Data("\(yellow("warning:")) \(text)\n".utf8))
+        for detail in details {
+            FileHandle.standardError.write(Data("  \(detail)\n".utf8))
+        }
+    }
 }
 
 extension String {
