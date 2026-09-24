@@ -13,6 +13,9 @@ public enum Operation: Sendable, Equatable {
     case startContainer(ContainerReference)
     case stopContainer(ContainerReference)
     case removeContainer(ContainerReference)
+    /// Hold the rest of the plan until a dependency is healthy or has finished, for a
+    /// `depends_on` condition that asks for more than started.
+    case waitForService(WaitOperation)
 
     /// The service this operation is part of, for per-service progress.
     public var service: String? {
@@ -27,6 +30,8 @@ public enum Operation: Sendable, Equatable {
             return operation.service
         case .startContainer(let reference), .stopContainer(let reference), .removeContainer(let reference):
             return reference.service
+        case .waitForService(let operation):
+            return operation.service
         }
     }
 
@@ -41,6 +46,11 @@ public enum Operation: Sendable, Equatable {
         case .startContainer(let reference): return "start \(reference.containerName)"
         case .stopContainer(let reference): return "stop \(reference.containerName)"
         case .removeContainer(let reference): return "remove \(reference.containerName)"
+        case .waitForService(let operation):
+            switch operation.condition {
+            case .healthy: return "wait for \(operation.containerName) to be healthy"
+            case .completedSuccessfully: return "wait for \(operation.containerName) to finish successfully"
+            }
         }
     }
 }
@@ -223,3 +233,26 @@ public struct ContainerReference: Sendable, Equatable {
     }
 }
 
+/// A dependency the plan waits on before it starts what depends on it.
+public struct WaitOperation: Sendable, Equatable {
+    public enum Condition: Sendable, Equatable {
+        /// Run the probe inside the container until it passes, or fails too often.
+        case healthy(Service.Healthcheck)
+        /// Wait for the container's process to exit, and fail unless it exits 0.
+        case completedSuccessfully
+    }
+
+    /// The service waited on.
+    public let service: String
+    public let containerName: String
+    public let condition: Condition
+    /// The first service in the plan that waits, for the error when the wait fails.
+    public let waitingService: String
+
+    public init(service: String, containerName: String, condition: Condition, waitingService: String) {
+        self.service = service
+        self.containerName = containerName
+        self.condition = condition
+        self.waitingService = waitingService
+    }
+}

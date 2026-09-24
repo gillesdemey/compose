@@ -255,7 +255,7 @@ struct FileParser {
 
     /// Networks and services can only be referred to once the whole project is read, because
     /// a service may name a network declared further down, or a service another file includes.
-    func validateReferences(in fragment: FileFragment) throws {
+    mutating func validateReferences(in fragment: FileFragment) throws {
         let file = fragment.file
         for service in file.orderedServices {
             let serviceMark = fragment.marks["services.\(service.name)"]
@@ -268,14 +268,33 @@ struct FileParser {
                     path: "services.\(service.name).networks"
                 )
             }
-            for dependency in service.dependsOn where file.services[dependency] == nil {
-                throw ParseError(
-                    reason: .undefinedReference,
-                    problem: "service `\(service.name)` depends on `\(dependency)`, "
-                        + "which the file does not declare",
-                    mark: serviceMark,
-                    path: "services.\(service.name).depends_on"
-                )
+            for dependency in service.dependsOn {
+                guard let target = file.services[dependency.service] else {
+                    throw ParseError(
+                        reason: .undefinedReference,
+                        problem: "service `\(service.name)` depends on `\(dependency.service)`, "
+                            + "which the file does not declare",
+                        mark: serviceMark,
+                        path: "services.\(service.name).depends_on"
+                    )
+                }
+                // Compose would fall back to the image's HEALTHCHECK. The image config this
+                // stack reads has no such field, so there is nothing to probe.
+                if dependency.condition == .healthy, target.healthcheck == nil {
+                    findings.append(
+                        Finding(
+                            kind: .unhandledForm,
+                            key: "depends_on",
+                            service: service.name,
+                            support: .deferred(
+                                severity: .behavioural,
+                                reason: "`\(target.name)` is waited on with `service_healthy` but has no "
+                                    + "`healthcheck` of its own, and an image's HEALTHCHECK cannot be read here"
+                            ),
+                            mark: serviceMark
+                        )
+                    )
+                }
             }
             for mount in service.mounts {
                 guard case .named(let name) = mount.source, file.volumes[name] == nil else { continue }

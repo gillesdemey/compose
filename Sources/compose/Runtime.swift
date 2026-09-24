@@ -1,4 +1,5 @@
 import ComposeModel
+import ComposeParser
 import ComposePlanner
 import ContainerAPIClient
 import ContainerPersistence
@@ -57,12 +58,20 @@ enum Runtime {
 
     // MARK: - Carrying a plan out
 
+    /// The exit of every container this run started, keyed by container name.
+    ///
+    /// The runtime reports an exit code only to a `wait` on the process, and only while the
+    /// container exists as a sandbox: once a one-shot has exited, nothing can be asked. So the
+    /// wait is registered as each container starts, before its process can have finished.
+    private typealias Exits = [String: Task<Int32, any Error>]
+
     static func execute(_ plan: Plan) async throws {
         let total = plan.operations.count
+        var exits: Exits = [:]
         for (index, operation) in plan.operations.enumerated() {
             Output.step(index + 1, of: total, operation.summary)
             do {
-                try await perform(operation)
+                try await perform(operation, exits: &exits)
             } catch let error as ComposeError {
                 throw error
             } catch {
@@ -78,7 +87,7 @@ enum Runtime {
     }
 
     // `Operation` is a name Foundation also uses, hence the qualification.
-    private static func perform(_ operation: ComposePlanner.Operation) async throws {
+    private static func perform(_ operation: ComposePlanner.Operation, exits: inout Exits) async throws {
         switch operation {
         case .createNetwork(let operation):
             try await createNetwork(operation)
@@ -92,12 +101,128 @@ enum Runtime {
             try await create(operation)
         case .startContainer(let reference):
             let process = try await ContainerClient().bootstrap(id: reference.containerName, stdio: [nil, nil, nil])
+            // Registered before `start`: the sandbox keeps the status for a waiter that arrives
+            // in time, and a one-shot can exit before `start` has even returned.
+            exits[reference.containerName] = Task { try await process.wait() }
             try await process.start()
         case .stopContainer(let reference):
             try await ContainerClient().stop(id: reference.containerName)
         case .removeContainer(let reference):
             try await ContainerClient().delete(id: reference.containerName, force: true)
+        case .waitForService(let operation):
+            switch operation.condition {
+            case .healthy(let healthcheck):
+                try await waitUntilHealthy(operation, healthcheck: healthcheck, exit: exits[operation.containerName])
+            case .completedSuccessfully:
+                try await waitForSuccess(operation, exit: exits[operation.containerName])
+            }
         }
+    }
+
+    // MARK: - Waiting on dependencies
+
+    /// Compose's own health state machine, run from here because nothing in the runtime runs
+    /// one: during `start_period` a probe every `start_interval` and failures not counted,
+    /// after it a probe every `interval`, and `retries` failures in a row is unhealthy.
+    private static func waitUntilHealthy(
+        _ operation: WaitOperation,
+        healthcheck: Service.Healthcheck,
+        exit: Task<Int32, any Error>?
+    ) async throws {
+        let client = ContainerClient()
+        let container = try await client.get(id: operation.containerName)
+        let startedAt = container.startedDate ?? Date()
+        let allowed = max(1, healthcheck.retries)
+        var failures = 0
+        while true {
+            let inStartPeriod = Date().timeIntervalSince(startedAt) < healthcheck.startPeriod
+            try await Task.sleep(for: .seconds(inStartPeriod ? healthcheck.startInterval : healthcheck.interval))
+
+            let current = try await client.get(id: operation.containerName)
+            guard current.status == .running else {
+                let code = await exitDescription(of: exit)
+                throw ComposeError(
+                    "`\(operation.service)` stopped\(code) before it became healthy, "
+                        + "so `\(operation.waitingService)` was not started"
+                )
+            }
+            let result = await probe(current, test: healthcheck.test, timeout: healthcheck.timeout)
+            if result == nil { return }
+            // A failure while the service is still starting is expected, which is the point of
+            // a start period.
+            if Date().timeIntervalSince(startedAt) >= healthcheck.startPeriod { failures += 1 }
+            Output.note("        not healthy yet: \(result ?? "")")
+            if failures >= allowed {
+                throw ComposeError(
+                    "`\(operation.service)` is unhealthy: its healthcheck failed \(failures) time\(failures == 1 ? "" : "s") "
+                        + "in a row, last with \(result ?? "no result"); `\(operation.waitingService)` was not started"
+                )
+            }
+        }
+    }
+
+    /// One run of the probe in the container, as `container exec` would run it: the
+    /// container's own environment, user and working directory. `nil` is a pass; anything
+    /// else says how it failed.
+    private static func probe(_ container: ContainerSnapshot, test: [String], timeout: Double) async -> String? {
+        guard let executable = test.first else { return "an empty test" }
+        var configuration = container.configuration.initProcess
+        configuration.executable = executable
+        configuration.arguments = Array(test.dropFirst())
+        configuration.terminal = false
+        do {
+            let process = try await ContainerClient().createProcess(
+                containerId: container.id,
+                processId: "compose-health-\(UUID().uuidString.lowercased())",
+                configuration: configuration,
+                stdio: [nil, nil, nil]
+            )
+            let exit = Task { try await process.wait() }
+            try await process.start()
+            let code = try await withThrowingTaskGroup(of: Int32?.self) { group in
+                group.addTask { try await exit.value }
+                group.addTask {
+                    try await Task.sleep(for: .seconds(timeout))
+                    return nil
+                }
+                let first = try await group.next() ?? nil
+                group.cancelAll()
+                return first
+            }
+            guard let code else {
+                try? await process.kill(SIGKILL)
+                return "no answer within \(ComposeFileRenderer.duration(timeout))"
+            }
+            return code == 0 ? nil : "exit code \(code)"
+        } catch {
+            return friendly(error)
+        }
+    }
+
+    private static func waitForSuccess(_ operation: WaitOperation, exit: Task<Int32, any Error>?) async throws {
+        guard let exit else {
+            // Started by an earlier `up` and still running. Its exit code goes to whoever
+            // started it, and that was not this process.
+            throw ComposeError(
+                "`\(operation.service)` was already running before this `up`, so how it exits cannot be seen from here; "
+                    + "run `up` again once it has finished"
+            )
+        }
+        let code = try await exit.value
+        guard code == 0 else {
+            throw ComposeError(
+                "`\(operation.service)` exited with code \(code), and `\(operation.waitingService)` waits for it to "
+                    + "finish successfully, so it was not started"
+            )
+        }
+    }
+
+    /// ` with code N` when this run started the container and it has exited, else nothing.
+    private static func exitDescription(of exit: Task<Int32, any Error>?) async -> String {
+        guard let exit else { return "" }
+        // The container is already down, so this returns at once.
+        guard let code = try? await exit.value else { return "" }
+        return " with code \(code)"
     }
 
     private static func createNetwork(_ operation: NetworkOperation) async throws {

@@ -104,6 +104,56 @@ public struct Service: Sendable, Hashable, Identifiable {
         public var isEmpty: Bool { cpus == nil && memoryBytes == nil }
     }
 
+    /// A `healthcheck:` that is switched on, with compose's defaults filled in.
+    ///
+    /// Nothing reports health on this stack, so `up` runs the probe itself, inside the
+    /// container, when another service waits on this one with `service_healthy`.
+    public struct Healthcheck: Sendable, Hashable {
+        /// The probe as an argument vector. A `CMD-SHELL` or bare string test is already
+        /// `/bin/sh -c <test>` by the time it is here.
+        public var test: [String]
+        /// Seconds, as are the other durations.
+        public var interval: Double
+        public var timeout: Double
+        public var retries: Int
+        /// Failures before this is up are not counted, and probes run every `startInterval`.
+        public var startPeriod: Double
+        public var startInterval: Double
+
+        public init(
+            test: [String],
+            interval: Double = 30,
+            timeout: Double = 30,
+            retries: Int = 3,
+            startPeriod: Double = 0,
+            startInterval: Double = 5
+        ) {
+            self.test = test
+            self.interval = interval
+            self.timeout = timeout
+            self.retries = retries
+            self.startPeriod = startPeriod
+            self.startInterval = startInterval
+        }
+    }
+
+    /// One entry under `depends_on`.
+    public struct Dependency: Sendable, Hashable {
+        public enum Condition: String, Sendable, Hashable, CaseIterable {
+            case started = "service_started"
+            case healthy = "service_healthy"
+            case completedSuccessfully = "service_completed_successfully"
+        }
+
+        public var service: String
+        public var condition: Condition
+
+        public init(_ service: String, condition: Condition = .started) {
+            self.service = service
+            self.condition = condition
+        }
+    }
+
     public var id: String { name }
 
     /// The key this service sits under in `services:`.
@@ -129,8 +179,10 @@ public struct Service: Sendable, Hashable, Identifiable {
     public var dnsSearch: [String]
     public var dnsOptions: [String]
     public var resources: Resources?
-    /// Service names this one must start after, already checked to exist.
-    public var dependsOn: [String]
+    /// `nil` when the file has none, or switched it off.
+    public var healthcheck: Healthcheck?
+    /// What this one must start after, in file order, already checked to exist.
+    public var dependsOn: [Dependency]
     public var extensions: [String: ExtensionValue]
 
     public init(
@@ -151,7 +203,8 @@ public struct Service: Sendable, Hashable, Identifiable {
         dnsSearch: [String] = [],
         dnsOptions: [String] = [],
         resources: Resources? = nil,
-        dependsOn: [String] = [],
+        healthcheck: Healthcheck? = nil,
+        dependsOn: [Dependency] = [],
         extensions: [String: ExtensionValue] = [:]
     ) {
         self.name = name
@@ -171,6 +224,7 @@ public struct Service: Sendable, Hashable, Identifiable {
         self.dnsSearch = dnsSearch
         self.dnsOptions = dnsOptions
         self.resources = resources
+        self.healthcheck = healthcheck
         self.dependsOn = dependsOn
         self.extensions = extensions
     }
@@ -182,8 +236,9 @@ extension Service {
     /// whatever order the file wrote their keys in, which is what makes the hash stamped on a
     /// container a usable answer to "has this service changed since?".
     ///
-    /// The service name is in it and the dependency list is not: reordering `depends_on`
-    /// changes the plan, not the container.
+    /// The service name is in it; the dependency list and the healthcheck are not. Reordering
+    /// `depends_on` changes the plan, and a probe is run from here rather than by the
+    /// container, so neither changes the container.
     public var canonicalDescription: String {
         var lines: [String] = []
         lines.append("service=\(name)")

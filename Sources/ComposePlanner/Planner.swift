@@ -207,6 +207,39 @@ public enum Planner {
             )
         }
 
+        // Each wait once, before the first service that needs it. Later dependents start after
+        // it anyway, because the plan is carried out in order.
+        var waited: Set<String> = []
+        func waits(before name: String, service: Service) -> [Operation] {
+            service.dependsOn.compactMap { dependency in
+                guard let target = file.services[dependency.service],
+                      let targetContainer = containerNames[dependency.service]
+                else { return nil }
+                let condition: WaitOperation.Condition
+                switch dependency.condition {
+                case .started:
+                    return nil
+                case .healthy:
+                    // The parser reported a wait on a service with no healthcheck, and the
+                    // policy refuses before a plan is made. A front end that goes ahead anyway
+                    // gets the ordering and nothing more.
+                    guard let healthcheck = target.healthcheck else { return nil }
+                    condition = .healthy(healthcheck)
+                case .completedSuccessfully:
+                    condition = .completedSuccessfully
+                }
+                guard waited.insert("\(dependency.service)#\(dependency.condition.rawValue)").inserted else { return nil }
+                return .waitForService(
+                    WaitOperation(
+                        service: dependency.service,
+                        containerName: targetContainer,
+                        condition: condition,
+                        waitingService: name
+                    )
+                )
+            }
+        }
+
         for name in order {
             guard let service = file.services[name],
                   let containerName = containerNames[name],
@@ -218,6 +251,7 @@ public enum Planner {
             case .unchanged, .remove:
                 continue
             case .start:
+                operations.append(contentsOf: waits(before: name, service: service))
                 operations.append(.startContainer(reference))
             case .create, .recreate:
                 let image = imageReference(for: service, project: project)
@@ -253,6 +287,7 @@ public enum Planner {
                         )
                     )
                 )
+                operations.append(contentsOf: waits(before: name, service: service))
                 operations.append(.startContainer(reference))
             }
         }

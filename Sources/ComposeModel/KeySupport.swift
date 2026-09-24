@@ -111,6 +111,10 @@ public enum KeySupportTable {
         "entrypoint": .supported,
         "user": .supported,
         "tmpfs": .supported,
+        // Probed by `up` for whatever waits on the service with `service_healthy`. Nothing
+        // reports health once `up` has returned, and nothing needs to: compose only acts on
+        // it while bringing a project up.
+        "healthcheck": .supported,
         "pull_policy": .deferred(
             severity: .cosmetic,
             reason: "an image is pulled when it is not already here; `always` and `never` are not honoured"
@@ -122,10 +126,6 @@ public enum KeySupportTable {
         "profiles": .deferred(
             severity: .behavioural,
             reason: "selecting a subset of services is not implemented yet"
-        ),
-        "healthcheck": .deferred(
-            severity: .behavioural,
-            reason: "a container cannot report health, so probes would have to be run here"
         ),
         // Value-dependent, and handled in the parser rather than read from here: `restart: no`
         // is what happens anyway, so only a policy that asks for more than nothing is reported.

@@ -15,7 +15,7 @@ public struct DependencyGraph: Sendable {
         for (name, service) in services {
             // A service may not depend on itself, and a dependency the file never declares was
             // already refused by the parser.
-            dependencies[name] = service.dependsOn.filter { $0 != name && services[$0] != nil }.sorted()
+            dependencies[name] = service.dependsOn.map(\.service).filter { $0 != name && services[$0] != nil }.sorted()
         }
         self.dependenciesByService = dependencies
         self.startOrder = try Self.topologicalOrder(of: dependencies)

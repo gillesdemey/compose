@@ -20,7 +20,7 @@ struct IncludeTests {
         )
         let db = try #require(result.file.services["db"])
         #expect(db.mounts == [Service.Mount(source: .bind("/project/data"), target: "/var/lib/data")])
-        #expect(result.file.services["web"]?.dependsOn == ["db"])
+        #expect(result.file.services["web"]?.dependsOn.map(\.service) == ["db"])
     }
 
     @Test("Included files may depend on each other and on the including file")
@@ -32,7 +32,7 @@ struct IncludeTests {
                 "/project/b.yaml": "services:\n  b:\n    image: nginx\n",
             ]
         )
-        #expect(result.file.services["a"]?.dependsOn == ["b", "web"])
+        #expect(result.file.services["a"]?.dependsOn.map(\.service) == ["b", "web"])
 
         let dangling = #expect(throws: ParseError.self) {
             try Fixture.parse(

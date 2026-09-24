@@ -41,12 +41,18 @@ struct RenderingTests {
                 deploy:
                   resources:
                     limits: { cpus: "0.5", memory: 512M }
-                depends_on: [db]
+                depends_on:
+                  db: { condition: service_healthy }
                 x-note: { owner: me, count: 3 }
               db:
                 image: postgres
                 container_name: "null"
                 working_dir: /var/lib
+                healthcheck:
+                  test: ["CMD-SHELL", "pg_isready -U $$USER"]
+                  interval: 1m30s
+                  timeout: 500ms
+                  retries: 5
                 labels:
                   tier: "on"
                 networks: [back]

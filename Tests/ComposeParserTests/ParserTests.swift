@@ -32,7 +32,7 @@ struct FileParsingTests {
         #expect(api.workingDirectory == "/srv")
         #expect(api.environment == ["DATABASE_URL": "postgres://db:5432/shop"])
         #expect(api.labels == ["com.example.role": "api"])
-        #expect(api.dependsOn == ["db"])
+        #expect(api.dependsOn.map(\.service) == ["db"])
         #expect(api.ports == [
             Service.Port(hostPort: 8080, containerPort: 8080),
             Service.Port(hostIP: "127.0.0.1", hostPort: 9229, containerPort: 9229),
@@ -133,7 +133,7 @@ struct FindingTests {
 
         #expect(byKey["cap_add"]?.first?.severity == .behavioural)
         #expect(byKey["profiles"]?.first?.support.severity == .behavioural)
-        #expect(byKey["healthcheck"] != nil)
+        #expect(byKey["ulimits"] != nil)
         #expect(byKey["privileged"] != nil)
 
         // Cosmetic keys are reported too, and do not block.
