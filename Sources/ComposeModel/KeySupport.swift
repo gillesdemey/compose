@@ -245,4 +245,10 @@ public struct Finding: Sendable, Equatable, Identifiable, Hashable {
         if let reason = detail ?? support.reason { text += ": \(reason)" }
         return text
     }
+
+    /// Whether `key`, as someone would type it after reading the message, names this finding:
+    /// the key itself, or any key it sits under, so `volumes` covers `volumes.type`.
+    public func isAbout(key: String) -> Bool {
+        self.key == key || self.key.hasPrefix("\(key).")
+    }
 }

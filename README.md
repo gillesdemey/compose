@@ -131,8 +131,8 @@ container compose config             # print the project as it will be run
 
 Every verb takes `-f` to point at a file elsewhere and `-p` to name the project (it otherwise
 comes from the file's `name`, then from the directory). `up` and `down` take `--dry-run`. `up`
-also takes `--force-recreate`, `--pull missing|always|never` and `--keep-orphans`; `down` takes
-`--keep-networks`; `config` takes `--services` to print only the service names.
+also takes `--force-recreate`, `--pull missing|always|never`, `--keep-orphans` and `--ignore`;
+`down` takes `--keep-networks`; `config` takes `--services` to print only the service names.
 
 `config` prints the project the way `docker compose config` does, as a compose file with
 every `include` and `extends` merged, variables substituted, `env_file` merged in, paths
@@ -161,6 +161,12 @@ error: nothing was created.
 Keys that cost nothing to ignore, such as an obsolete `version`, are printed as notes and
 stepped over. The difference is a severity carried per key, not a judgement made at the
 point of refusal.
+
+To run a file anyway, name each key to go without: `container compose up --ignore restart`.
+It is repeatable, a key covers the keys under it (`--ignore volumes` covers `volumes.type`),
+and it lasts one run. What an ignored key asks for is left undone, and each finding it covers
+is still printed, as a warning, on every run that ignores it. A key that matches nothing is
+warned about too, so a typo does not look like a decision.
 
 ## Using it from Orchard
 
