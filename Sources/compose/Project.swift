@@ -53,7 +53,11 @@ enum ProjectLoader {
     ///
     /// `down` never calls this. Refusing to stop containers over a key nothing is about to act
     /// on would leave someone with no way to clean up.
-    static func enforcePolicy(on project: LoadedProject) throws {
+    ///
+    /// `ignoring` is the way past it, one key at a time and one run at a time: what those keys
+    /// ask for is left undone, and every such finding is still printed, as a warning, so the
+    /// decision is in the output of every run it applies to.
+    static func enforcePolicy(on project: LoadedProject, ignoring ignored: [String] = []) throws {
         for warning in project.result.interpolationWarnings {
             Output.warning(warning.message)
         }
@@ -61,14 +65,31 @@ enum ProjectLoader {
             Output.note("note: \(finding.message)")
         }
 
-        let blocking = project.result.blockingFindings
+        let all = project.result.blockingFindings
+        let waived = all.filter { finding in ignored.contains { finding.isAbout(key: $0) } }
+        for key in ignored where !all.contains(where: { $0.isAbout(key: key) }) {
+            Output.warning("`--ignore \(key)` matches nothing this file asks for")
+        }
+        if !waived.isEmpty {
+            let count = waived.count
+            Output.warning(
+                "ignoring \(count) thing\(count == 1 ? "" : "s") this cannot do, as asked; "
+                    + "\(count == 1 ? "it is" : "they are") left undone"
+            )
+            for finding in waived { Output.line("  \(finding.message)") }
+        }
+
+        let blocking = all.filter { !waived.contains($0) }
         guard blocking.isEmpty else {
             let count = blocking.count
             Output.error(
                 "\(project.path) asks for \(count) thing\(count == 1 ? "" : "s") this cannot do",
                 details: blocking.map(\.message)
             )
-            Output.error("nothing was created. Remove or change those keys and run again.")
+            Output.error(
+                "nothing was created. Remove or change those keys, or pass `--ignore <key>` "
+                    + "to run without them, and run again."
+            )
             throw ExitCode.failure
         }
     }

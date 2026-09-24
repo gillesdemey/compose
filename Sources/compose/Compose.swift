@@ -56,10 +56,20 @@ struct Up: AsyncParsableCommand {
     @Flag(name: .long, help: "Keep containers whose service has left the file, rather than removing them.")
     var keepOrphans = false
 
+    @Option(
+        name: .long,
+        help: ArgumentHelp(
+            "Run without a key this cannot honour instead of refusing the file, e.g. `restart`; repeat for more. "
+                + "What it asks for is left undone, and each one is still printed as a warning.",
+            valueName: "key"
+        )
+    )
+    var ignore: [String] = []
+
     func run() async throws {
         let project = try ProjectLoader.load(common)
         Report.header(project)
-        try ProjectLoader.enforcePolicy(on: project)
+        try ProjectLoader.enforcePolicy(on: project, ignoring: ignore)
 
         let state = try await Runtime.snapshot()
         let plan: Plan

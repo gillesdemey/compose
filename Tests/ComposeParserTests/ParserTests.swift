@@ -198,6 +198,32 @@ struct FindingTests {
         #expect(byKey["nonsense"]?.first?.kind == .unknownKey)
     }
 
+    @Test("A key named to ignore covers the keys under it, and nothing that only starts the same")
+    func ignoredKeyMatching() throws {
+        let result = try Fixture.parse(
+            """
+            services:
+              app:
+                image: nginx
+                restart: always
+                volumes:
+                  - type: npipe
+                    target: /pipe
+                devices: ["/dev/fuse"]
+            """
+        )
+        let byKey = Dictionary(grouping: result.findings, by: \.key)
+        let tmpfsLike = try #require(byKey["volumes.type"]?.first)
+        #expect(tmpfsLike.isAbout(key: "volumes"))
+        #expect(tmpfsLike.isAbout(key: "volumes.type"))
+        #expect(!tmpfsLike.isAbout(key: "volumes.ty"))
+        let restart = try #require(byKey["restart"]?.first)
+        #expect(restart.isAbout(key: "restart"))
+        #expect(!restart.isAbout(key: "rest"))
+        #expect(!restart.isAbout(key: "restart.policy"))
+        #expect(byKey["devices"]?.first?.isAbout(key: "restart") == false)
+    }
+
     @Test("`restart: no` is honoured exactly, so it is not reported")
     func restartNoIsHonoured() throws {
         let honoured = try Fixture.parse(
