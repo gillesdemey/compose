@@ -111,6 +111,18 @@ public struct CreateOperation: Sendable, Equatable {
         }
     }
 
+    /// A service-level or `type: tmpfs` mount: memory in the guest, nothing on the host.
+    public struct Tmpfs: Sendable, Equatable {
+        public let containerPath: String
+        /// As the guest's `mount` takes them, `ro` included when the mount is read-only.
+        public let options: [String]
+
+        public init(containerPath: String, options: [String]) {
+            self.containerPath = containerPath
+            self.options = options
+        }
+    }
+
     public struct Port: Sendable, Equatable {
         /// The host interface to publish on. `0.0.0.0` unless the file named one, which is a
         /// difference worth keeping: a port bound to `127.0.0.1` is not on the network.
@@ -139,8 +151,13 @@ public struct CreateOperation: Sendable, Equatable {
     /// on.
     public let environment: [String]
     public let command: [String]
+    /// `nil` keeps the image's.
+    public let entrypoint: [String]?
+    /// `nil` keeps the image's.
+    public let user: String?
     public let workingDirectory: String?
     public let mounts: [Mount]
+    public let tmpfs: [Tmpfs]
     public let ports: [Port]
     public let networkName: String
     public let labels: [String: String]
@@ -158,8 +175,11 @@ public struct CreateOperation: Sendable, Equatable {
         imageReference: String,
         environment: [String],
         command: [String],
+        entrypoint: [String]? = nil,
+        user: String? = nil,
         workingDirectory: String?,
         mounts: [Mount],
+        tmpfs: [Tmpfs] = [],
         ports: [Port],
         networkName: String,
         labels: [String: String],
@@ -174,8 +194,11 @@ public struct CreateOperation: Sendable, Equatable {
         self.imageReference = imageReference
         self.environment = environment
         self.command = command
+        self.entrypoint = entrypoint
+        self.user = user
         self.workingDirectory = workingDirectory
         self.mounts = mounts
+        self.tmpfs = tmpfs
         self.ports = ports
         self.networkName = networkName
         self.labels = labels
@@ -199,3 +222,4 @@ public struct ContainerReference: Sendable, Equatable {
         self.service = service
     }
 }
+

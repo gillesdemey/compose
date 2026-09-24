@@ -240,6 +240,7 @@ enum Runtime {
         let arguments = Planner.processArguments(
             imageEntrypoint: imageConfig?.entrypoint,
             imageCmd: imageConfig?.cmd,
+            entrypoint: operation.entrypoint,
             command: operation.command
         )
         guard let executable = arguments.first else {
@@ -248,8 +249,10 @@ enum Runtime {
                     + "`\(operation.service)` has nothing to run; give it a `command`"
             )
         }
+        // The file's user over the image's, and root when neither says, as `container run`
+        // does. A name is resolved by the guest against the image's /etc/passwd.
         let user: ProcessConfiguration.User = {
-            if let raw = imageConfig?.user, !raw.isEmpty { return .raw(userString: raw) }
+            if let raw = operation.user ?? imageConfig?.user, !raw.isEmpty { return .raw(userString: raw) }
             return .id(uid: 0, gid: 0)
         }()
         let process = ProcessConfiguration(
@@ -266,7 +269,7 @@ enum Runtime {
             image: image.description,
             process: process
         )
-        configuration.mounts = mounts
+        configuration.mounts = mounts + operation.tmpfs.map { .tmpfs(destination: $0.containerPath, options: $0.options) }
         configuration.publishedPorts = ports
         configuration.labels = operation.labels
         // A compose file can ask for half a core; a VM cannot have one. Round up, because the

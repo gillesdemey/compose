@@ -108,6 +108,9 @@ public enum KeySupportTable {
         "networks": .supported,
         "deploy": .supported,
         "depends_on": .supported,
+        "entrypoint": .supported,
+        "user": .supported,
+        "tmpfs": .supported,
         "pull_policy": .deferred(
             severity: .cosmetic,
             reason: "an image is pulled when it is not already here; `always` and `never` are not honoured"
@@ -115,10 +118,6 @@ public enum KeySupportTable {
         "platform": .deferred(
             severity: .cosmetic,
             reason: "every container on this stack is linux/arm64 today"
-        ),
-        "entrypoint": .deferred(
-            severity: .behavioural,
-            reason: "the create surface can override cmd but not entrypoint"
         ),
         "profiles": .deferred(
             severity: .behavioural,
@@ -134,14 +133,9 @@ public enum KeySupportTable {
             severity: .behavioural,
             reason: "container has no restart policy; a container that exits stays exited"
         ),
-        "user": .unsupported(
-            severity: .behavioural,
-            reason: "the create surface cannot set the process user"
-        ),
         "cap_add": .unsupported(severity: .behavioural, reason: "capabilities are not settable"),
         "cap_drop": .unsupported(severity: .behavioural, reason: "capabilities are not settable"),
         "devices": .unsupported(severity: .behavioural, reason: "device passthrough is not available"),
-        "tmpfs": .unsupported(severity: .behavioural, reason: "tmpfs mounts are not available"),
         "ulimits": .unsupported(severity: .behavioural, reason: "resource limits are not settable"),
         "secrets": .unsupported(severity: .behavioural, reason: "container has no secret mounting"),
         "configs": .unsupported(severity: .behavioural, reason: "container has no config mounting"),

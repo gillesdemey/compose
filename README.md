@@ -53,9 +53,10 @@ single container.
 
 The dividing line is what container's own create surface can already express.
 
-**Supported:** `image`, `build`, `container_name`, `command`, `environment`, `env_file`,
-`working_dir`, `ports`, bind `volumes`, `labels`, `networks`, `dns`, `dns_search`,
-`dns_opt`, `deploy.resources`, `depends_on` in its list form, `extends`, and `include`.
+**Supported:** `image`, `build`, `container_name`, `command`, `entrypoint`, `user`,
+`environment`, `env_file`, `working_dir`, `ports`, bind and tmpfs `volumes`, `tmpfs`, `labels`,
+`networks`, `dns`, `dns_search`, `dns_opt`, `deploy.resources`, `depends_on` in its list form,
+`extends`, and `include`.
 
 `extends` merges by the Compose Specification's rules, and paths in a base file resolve
 against that file's directory. Each `include` entry is read as a project of its own, with its
@@ -64,14 +65,13 @@ supported. Where compose keeps whichever of two different definitions of one nam
 first, this refuses the file instead, naming both places. A problem in an included or
 extended file is reported against that file.
 
-**Not yet:** `entrypoint`, named `volumes`, attaching to multiple networks, `profiles`,
-`healthcheck`, `depends_on` with conditions, and the `!reset` and `!override` merge tags.
-`pull_policy` and `platform` are
-read but not honoured: an image is pulled when it is missing, and everything on this stack is
-linux/arm64.
+**Not yet:** named `volumes`, attaching to multiple networks, `profiles`, `healthcheck`,
+`depends_on` with conditions, and the `!reset` and `!override` merge tags. `pull_policy` and
+`platform` are read but not honoured: an image is pulled when it is missing, and everything on
+this stack is linux/arm64.
 
-**Not possible today:** `restart`, `user`, `cap_add`, `devices`, `tmpfs`, `ulimits`,
-`secrets`, `configs`, `extra_hosts`, `privileged`, `network_mode`. These need runtime support
+**Not possible today:** `restart`, `cap_add`, `devices`, `ulimits`, `secrets`, `configs`,
+`extra_hosts`, `privileged`, `network_mode`. These need runtime support
 container does not have. Restart policy is tracked upstream at
 [#2142](https://github.com/apple/container/issues/2142), health at
 [#1502](https://github.com/apple/container/issues/1502).
@@ -148,7 +148,7 @@ and creates nothing:
 error: compose.yaml asks for 2 things this cannot do
   8:14: `restart` in service `db` is not honoured: container has no restart policy; a
         container that exits stays exited
-  15:11: `user` in service `api` is not honoured: the create surface cannot set the process user
+  15:11: `cap_add` in service `api` is not honoured: capabilities are not settable
 error: nothing was created.
 ```
 

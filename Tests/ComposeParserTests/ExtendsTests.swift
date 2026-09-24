@@ -161,9 +161,9 @@ struct ExtendsTests {
 
     @Test("A finding in a base file names that file, and goes away when the service overrides the key")
     func baseFindings() throws {
-        let files = ["/project/base.yaml": "services:\n  app:\n    image: nginx\n    restart: always\n    user: root\n"]
+        let files = ["/project/base.yaml": "services:\n  app:\n    image: nginx\n    restart: always\n    privileged: true\n"]
         let inherited = try Fixture.parse("services:\n  app:\n    extends: { file: base.yaml, service: app }\n", files: files)
-        #expect(inherited.findings.map(\.key).sorted() == ["restart", "user"])
+        #expect(inherited.findings.map(\.key).sorted() == ["privileged", "restart"])
         let restart = try #require(inherited.findings.first { $0.key == "restart" })
         #expect(restart.mark == SourceMark(line: 4, column: 14, file: "base.yaml"))
         #expect(restart.message.hasPrefix("base.yaml:4:14: "))
@@ -172,6 +172,6 @@ struct ExtendsTests {
             "services:\n  app:\n    extends: { file: base.yaml, service: app }\n    restart: \"no\"\n",
             files: files
         )
-        #expect(overridden.findings.map(\.key) == ["user"])
+        #expect(overridden.findings.map(\.key) == ["privileged"])
     }
 }

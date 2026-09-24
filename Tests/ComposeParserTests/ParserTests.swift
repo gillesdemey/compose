@@ -131,8 +131,8 @@ struct FindingTests {
         #expect(restart.mark?.line == 4)
         #expect(restart.message.contains("`restart` in service `app`"))
 
-        #expect(byKey["user"]?.first?.severity == .behavioural)
-        #expect(byKey["entrypoint"]?.first?.support.severity == .behavioural)
+        #expect(byKey["cap_add"]?.first?.severity == .behavioural)
+        #expect(byKey["profiles"]?.first?.support.severity == .behavioural)
         #expect(byKey["healthcheck"] != nil)
         #expect(byKey["privileged"] != nil)
 
@@ -178,7 +178,7 @@ struct FindingTests {
               app:
                 image: nginx
                 restart: always
-                entrypoint: /bin/sh
+                profiles: [debug]
                 nonsense: 1
             """
         )
@@ -189,10 +189,10 @@ struct FindingTests {
         #expect(restart.support.needsRuntimeSupport)
         #expect(!restart.support.isDeferred)
 
-        // Overriding an entrypoint is only a matter of this not doing it yet.
-        let entrypoint = try #require(byKey["entrypoint"]?.first)
-        #expect(entrypoint.support.isDeferred)
-        #expect(!entrypoint.support.needsRuntimeSupport)
+        // Selecting profiles is only a matter of this not doing it yet.
+        let profiles = try #require(byKey["profiles"]?.first)
+        #expect(profiles.support.isDeferred)
+        #expect(!profiles.support.needsRuntimeSupport)
 
         // And a key nobody defines is neither.
         #expect(byKey["nonsense"]?.first?.kind == .unknownKey)

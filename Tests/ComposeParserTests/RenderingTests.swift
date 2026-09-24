@@ -28,6 +28,13 @@ struct RenderingTests {
                 volumes:
                   - ./data:/data:ro
                   - /cache
+                  - type: tmpfs
+                    target: /scratch
+                    read_only: true
+                    tmpfs: { size: 64m }
+                tmpfs: ["/run:size=8m,noexec"]
+                entrypoint: []
+                user: "1000:1000"
                 dns: [1.1.1.1]
                 dns_search: [example.com]
                 dns_opt: [ndots:2]
@@ -53,10 +60,20 @@ struct RenderingTests {
         let reread = try Fixture.parse(yaml)
 
         #expect(reread.file.name == "demo")
+        // Mount order is not part of what a service means (the hash sorts them), and tmpfs
+        // mounts come back from a key of their own.
+        func normalised(_ services: [String: Service]) -> [String: Service] {
+            services.mapValues { service in
+                var service = service
+                service.mounts.sort { $0.target < $1.target }
+                return service
+            }
+        }
         var expected = original.file.services
         // Written down as the network compose would attach it to.
         expected["app"]?.networks = ["default"]
-        #expect(reread.file.services == expected)
+        #expect(normalised(reread.file.services) == normalised(expected))
+        #expect(original.file.services["app"]?.mounts.count == 3)
         // The driver is reported on the way in and not honoured, so it is not written out.
         #expect(reread.file.networks["back"] == NetworkSpec(key: "back", name: "demo_back", labels: ["team": "data"]))
         #expect(reread.file.networks["default"] == NetworkSpec(key: "default", name: "demo_default"))
