@@ -28,7 +28,8 @@ enum ProjectLoader {
         do {
             result = try ComposeFileParser.parse(contentsOfFile: path)
         } catch let error as ParseError {
-            throw ComposeError("\(path):\(error.description)")
+            // An error inside an included or extended file already names that file.
+            throw ComposeError(error.mark?.file == nil ? "\(path):\(error.description)" : error.description)
         } catch {
             throw ComposeError("\(path) could not be read: \(error.localizedDescription)")
         }

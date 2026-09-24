@@ -34,6 +34,21 @@ public struct ParseOptions: Sendable {
 /// judge; only a file that cannot be understood at all is an error.
 public enum ComposeFileParser {
     public static func parse(yaml: String, options: ParseOptions = ParseOptions()) throws -> ParseResult {
+        try parse(yaml: yaml, options: options, filePath: nil)
+    }
+
+    public static func parse(contentsOfFile path: String, options: ParseOptions? = nil) throws -> ParseResult {
+        let directory = (path as NSString).deletingLastPathComponent
+        var resolved = options ?? ParseOptions(projectDirectory: directory.isEmpty ? "." : directory)
+        if options == nil { resolved.projectDirectory = directory.isEmpty ? "." : directory }
+        let text = try resolved.fileSystem.contentsOfFile(atPath: path)
+        let absolute = URL(fileURLWithPath: path).standardizedFileURL.path
+        return try parse(yaml: text, options: resolved, filePath: absolute)
+    }
+
+    /// `filePath` is the starting file's absolute path when there is one, so that an
+    /// `include` or `extends` leading back to it is recognised as the same file.
+    private static func parse(yaml: String, options: ParseOptions, filePath: String?) throws -> ParseResult {
         let root: Node?
         do {
             root = try Yams.compose(yaml: yaml)
@@ -43,21 +58,43 @@ public enum ComposeFileParser {
         guard let root else {
             throw ParseError(reason: .missingKey, problem: "the compose file is empty")
         }
-        var parser = FileParser(options: options, interpolator: try Self.interpolator(for: options))
-        let file = try parser.run(root: root)
+        let directory = resolvePath(".", relativeTo: options.projectDirectory)
+        var parser = FileParser(
+            options: options,
+            interpolator: try Self.interpolator(for: options),
+            directory: directory,
+            displayName: nil,
+            filePath: filePath,
+            root: root,
+            sources: SourceCache(rootDirectory: directory),
+            includeChain: filePath.map { [$0] } ?? []
+        )
+        let fragment = try parser.fragment(from: try parser.load())
+
+        guard !fragment.file.services.isEmpty else {
+            let services = root.mapping?["services"]
+            throw ParseError(
+                reason: services == nil ? .missingKey : .wrongShape,
+                problem: services == nil
+                    ? "the file declares no `services`"
+                    : "`services` declares nothing",
+                mark: parser.mark(root)
+            )
+        }
+        try parser.validateReferences(in: fragment)
+
+        // The same file can be reached twice, through two includes or a service extended
+        // from twice, and says the same thing each time. Once is enough to hear it.
         return ParseResult(
-            file: file,
-            findings: parser.findings,
-            interpolationWarnings: parser.warnings
+            file: fragment.file,
+            findings: unique(parser.findings),
+            interpolationWarnings: unique(parser.warnings)
         )
     }
 
-    public static func parse(contentsOfFile path: String, options: ParseOptions? = nil) throws -> ParseResult {
-        let directory = (path as NSString).deletingLastPathComponent
-        var resolved = options ?? ParseOptions(projectDirectory: directory.isEmpty ? "." : directory)
-        if options == nil { resolved.projectDirectory = directory.isEmpty ? "." : directory }
-        let text = try resolved.fileSystem.contentsOfFile(atPath: path)
-        return try parse(yaml: text, options: resolved)
+    private static func unique<T: Hashable>(_ items: [T]) -> [T] {
+        var seen: Set<T> = []
+        return items.filter { seen.insert($0).inserted }
     }
 
     /// Shell environment over `.env` file, which is the order compose documents and the order
@@ -77,18 +114,56 @@ public enum ComposeFileParser {
     }
 }
 
-/// One parse in progress. A struct rather than a free function because findings and warnings
-/// accumulate across the whole file and every helper needs to add to them.
+/// One file's parse in progress. A struct rather than a free function because findings and
+/// warnings accumulate across the whole file and every helper needs to add to them.
+///
+/// Files reached through `include` or `extends` get a parser of their own, with the
+/// directory and variables that file resolves against, and hand their findings back.
 struct FileParser {
     let options: ParseOptions
     let interpolator: Interpolator
+    /// Where relative paths in this file resolve: the directory the file lives in, or an
+    /// include's `project_directory`.
+    let directory: String
+    /// The file as marks name it, `nil` for the file the parse started from.
+    let displayName: String?
+    /// Absolute, `nil` when the parse started from a string rather than a file.
+    let filePath: String?
+    let root: Node
+    let sources: SourceCache
+    /// Files being included, outermost first, so that one including itself is caught.
+    let includeChain: [String]
     var findings: [Finding] = []
     var warnings: [InterpolationWarning] = []
 
-    mutating func run(root: Node) throws -> ComposeFile {
+    init(
+        options: ParseOptions,
+        interpolator: Interpolator,
+        directory: String,
+        displayName: String?,
+        filePath: String?,
+        root: Node,
+        sources: SourceCache,
+        includeChain: [String]
+    ) {
+        self.options = options
+        self.interpolator = interpolator
+        self.directory = directory
+        self.displayName = displayName
+        self.filePath = filePath
+        self.root = root
+        self.sources = sources
+        self.includeChain = includeChain
+    }
+
+    /// This file, with every `extends` followed and every `include` read, and nothing yet
+    /// checked against anything outside it: an included file may depend on a service a
+    /// sibling declares.
+    mutating func load() throws -> LayeredFile {
         let top = try mapping(root, path: "")
-        var file = ComposeFile()
+        var file = LayeredFile()
         var serviceNodes: [(name: String, node: Node)] = []
+        var includeNode: Node?
 
         if let versionNode = top["version"] {
             try checkSpecVersion(versionNode)
@@ -123,8 +198,16 @@ struct FileParser {
                 }
             case "networks":
                 file.networks = try parseTopLevelNetworks(valueNode)
+                for (keyNode, _) in valueNode.mapping ?? [:] {
+                    if let name = keyNode.scalar?.string { file.marks["networks.\(name)"] = mark(keyNode) }
+                }
             case "volumes":
                 file.volumes = try parseTopLevelVolumes(valueNode)
+                for (keyNode, _) in valueNode.mapping ?? [:] {
+                    if let name = keyNode.scalar?.string { file.marks["volumes.\(name)"] = mark(keyNode) }
+                }
+            case "include":
+                includeNode = valueNode
             case "version":
                 note(key: "version", node: valueNode, support: KeySupportTable.topLevel["version"]!)
             default:
@@ -136,21 +219,12 @@ struct FileParser {
             }
         }
 
-        guard !serviceNodes.isEmpty else {
-            throw ParseError(
-                reason: top["services"] == nil ? .missingKey : .wrongShape,
-                problem: top["services"] == nil
-                    ? "the file declares no `services`"
-                    : "`services` declares nothing",
-                mark: mark(root)
-            )
-        }
-
         for (name, node) in serviceNodes {
-            file.services[name] = try parseService(name: name, node: node)
+            file.services.append((name, try serviceLayer(name: name, node: node)))
         }
-
-        try validateReferences(in: file, serviceNodes: serviceNodes)
+        if let includeNode {
+            file.included = try parseIncludes(includeNode)
+        }
         return file
     }
 
@@ -179,17 +253,18 @@ struct FileParser {
         }
     }
 
-    /// Networks and services can only be referred to once the whole file is read, because a
-    /// service may name a network the file declares further down.
-    private func validateReferences(in file: ComposeFile, serviceNodes: [(name: String, node: Node)]) throws {
-        let nodesByName = Dictionary(uniqueKeysWithValues: serviceNodes.map { ($0.name, $0.node) })
+    /// Networks and services can only be referred to once the whole project is read, because
+    /// a service may name a network declared further down, or a service another file includes.
+    func validateReferences(in fragment: FileFragment) throws {
+        let file = fragment.file
         for service in file.orderedServices {
+            let serviceMark = fragment.marks["services.\(service.name)"]
             for network in service.networks where network != "default" && file.networks[network] == nil {
                 throw ParseError(
                     reason: .undefinedReference,
                     problem: "service `\(service.name)` attaches to network `\(network)`, "
                         + "which the file does not declare",
-                    mark: nodesByName[service.name].flatMap(mark),
+                    mark: serviceMark,
                     path: "services.\(service.name).networks"
                 )
             }
@@ -198,7 +273,7 @@ struct FileParser {
                     reason: .undefinedReference,
                     problem: "service `\(service.name)` depends on `\(dependency)`, "
                         + "which the file does not declare",
-                    mark: nodesByName[service.name].flatMap(mark),
+                    mark: serviceMark,
                     path: "services.\(service.name).depends_on"
                 )
             }
@@ -208,7 +283,7 @@ struct FileParser {
                     reason: .undefinedReference,
                     problem: "service `\(service.name)` mounts volume `\(name)`, "
                         + "which the file does not declare",
-                    mark: nodesByName[service.name].flatMap(mark),
+                    mark: serviceMark,
                     path: "services.\(service.name).volumes"
                 )
             }

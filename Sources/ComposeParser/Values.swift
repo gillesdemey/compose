@@ -8,7 +8,7 @@ extension FileParser {
     // MARK: - Nodes
 
     func mark(_ node: Node) -> SourceMark? {
-        node.mark.map { SourceMark(line: $0.line, column: $0.column) }
+        node.mark.map { SourceMark(line: $0.line, column: $0.column, file: displayName) }
     }
 
     func mapping(_ node: Node, path: String) throws -> Node.Mapping {
