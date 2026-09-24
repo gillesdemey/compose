@@ -282,6 +282,52 @@ struct CreateOperationTests {
         )
     }
 
+    @Test("A condition is waited on once, just before the first service that needs it starts")
+    func waitsForConditions() throws {
+        let file = try Sample.file(
+            """
+            services:
+              db:
+                image: postgres
+                healthcheck: { test: ["CMD", "pg_isready"], interval: 2s }
+              migrate:
+                image: migrate
+                depends_on: { db: { condition: service_healthy } }
+              api:
+                image: api
+                depends_on:
+                  db: { condition: service_healthy }
+                  migrate: { condition: service_completed_successfully }
+              web:
+                image: web
+                depends_on:
+                  migrate: { condition: service_completed_successfully }
+                  api: { condition: service_started }
+            """
+        )
+        let plan = try Planner.up(file: file, project: Sample.project, state: CurrentState(images: ["postgres:latest", "migrate:latest", "api:latest", "web:latest"]))
+        let starts = plan.operations.compactMap { operation -> String? in
+            switch operation {
+            case .startContainer(let reference): return "start \(reference.service ?? "")"
+            case .waitForService(let wait): return "wait \(wait.service) for \(wait.waitingService)"
+            default: return nil
+            }
+        }
+        #expect(starts == [
+            "start db",
+            "wait db for migrate",
+            "start migrate",
+            "wait migrate for api",
+            "start api",
+            "start web",
+        ])
+        let healthy = plan.operations.compactMap { operation -> Service.Healthcheck? in
+            guard case .waitForService(let wait) = operation, case .healthy(let check) = wait.condition else { return nil }
+            return check
+        }
+        #expect(healthy == [Service.Healthcheck(test: ["pg_isready"], interval: 2)])
+    }
+
     @Test("The networks a plan will create are the ones a front end can name in advance")
     func networkNames() throws {
         let file = try Sample.file(

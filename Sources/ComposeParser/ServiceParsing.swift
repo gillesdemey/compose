@@ -43,6 +43,8 @@ extension FileParser {
                 layer.entrypoint = valueNode.null != nil ? nil : try parseCommand(valueNode, path: "\(base).entrypoint")
             case "user":
                 layer.user = try string(valueNode, path: "\(base).user")
+            case "healthcheck":
+                layer.healthcheck = try parseHealthcheck(valueNode, service: name, path: "\(base).healthcheck")
             case "tmpfs":
                 layer.mounts += try parseTmpfs(valueNode, path: "\(base).tmpfs")
             case "environment":
@@ -584,6 +586,101 @@ extension FileParser {
         return options
     }
 
+    // MARK: - healthcheck
+
+    private mutating func parseHealthcheck(_ node: Node, service: String, path: String) throws -> ServiceLayer.Healthcheck {
+        var check = ServiceLayer.Healthcheck()
+        for (keyNode, valueNode) in try mapping(node, path: path) {
+            let key = keyNode.scalar?.string ?? ""
+            let fieldPath = "\(path).\(key)"
+            switch key {
+            case "test":
+                let test = try parseHealthcheckTest(valueNode, path: fieldPath)
+                check.test = test ?? []
+                if test == nil { check.disabled = true }
+            case "disable":
+                check.disabled = valueNode.bool ?? false
+            case "interval": check.interval = try duration(valueNode, path: fieldPath)
+            case "timeout": check.timeout = try duration(valueNode, path: fieldPath)
+            case "start_period": check.startPeriod = try duration(valueNode, path: fieldPath)
+            case "start_interval": check.startInterval = try duration(valueNode, path: fieldPath)
+            case "retries":
+                let text = try string(valueNode, path: fieldPath)
+                guard let retries = Int(text), retries >= 0 else {
+                    throw ParseError(reason: .invalidValue, problem: "`\(fieldPath)` must be a whole number", mark: mark(valueNode), path: fieldPath)
+                }
+                check.retries = retries
+            default:
+                if KeySupportTable.isExtensionKey(key) { continue }
+                noteUnknown(key: "healthcheck.\(key)", service: service, node: keyNode)
+            }
+        }
+        return check
+    }
+
+    /// The probe as an argument vector, or `nil` for `NONE`, which switches the check off.
+    ///
+    /// A bare string means `CMD-SHELL`, and `CMD-SHELL` runs through the image's `/bin/sh`,
+    /// as it does under compose.
+    private mutating func parseHealthcheckTest(_ node: Node, path: String) throws -> [String]? {
+        guard node.sequence != nil else {
+            return ["/bin/sh", "-c", try string(node, path: path)]
+        }
+        let items = try sequence(node, path: path).enumerated().map { index, element in
+            try string(element, path: "\(path)[\(index)]")
+        }
+        switch items.first {
+        case "NONE":
+            return nil
+        case "CMD" where items.count > 1:
+            return Array(items.dropFirst())
+        case "CMD-SHELL" where items.count > 1:
+            return ["/bin/sh", "-c", items.dropFirst().joined(separator: " ")]
+        default:
+            throw ParseError(
+                reason: .invalidValue,
+                problem: "`\(path)` must start with `CMD`, `CMD-SHELL` or `NONE`, followed by the probe",
+                mark: mark(node),
+                path: path
+            )
+        }
+    }
+
+    /// Seconds, from compose's duration format: `1m30s`, `500ms`, `2h`. A bare `0` is allowed,
+    /// as it is in the Go parser compose uses; any other bare number has no unit to read.
+    private mutating func duration(_ node: Node, path: String) throws -> Double {
+        let text = try string(node, path: path)
+        if let seconds = Self.parseDuration(text) { return seconds }
+        throw ParseError(
+            reason: .invalidValue,
+            problem: "`\(text)` is not a duration; write it like `30s`, `1m30s` or `500ms`",
+            mark: mark(node),
+            path: path
+        )
+    }
+
+    static func parseDuration(_ text: String) -> Double? {
+        if text == "0" { return 0 }
+        let units: [(suffix: String, seconds: Double)] = [
+            ("ns", 1e-9), ("us", 1e-6), ("µs", 1e-6), ("ms", 1e-3), ("s", 1), ("m", 60), ("h", 3600),
+        ]
+        var rest = Substring(text)
+        var total = 0.0
+        guard !rest.isEmpty else { return nil }
+        while !rest.isEmpty {
+            let number = rest.prefix { $0.isNumber || $0 == "." }
+            guard !number.isEmpty, let value = Double(number) else { return nil }
+            rest = rest.dropFirst(number.count)
+            // Longest suffix first, so `ms` is not read as `m` followed by garbage.
+            guard let unit = units.sorted(by: { $0.suffix.count > $1.suffix.count }).first(where: { rest.hasPrefix($0.suffix) }) else {
+                return nil
+            }
+            rest = rest.dropFirst(unit.suffix.count)
+            total += value * unit.seconds
+        }
+        return total
+    }
+
     // MARK: - resolver
 
     /// `dns`, `dns_search` and `dns_opt` each take a bare string or a list of them, which is
@@ -702,31 +799,33 @@ extension FileParser {
 
     // MARK: - depends_on
 
-    private mutating func parseDependsOn(_ node: Node, service: String, path: String) throws -> [String] {
+    private mutating func parseDependsOn(_ node: Node, service: String, path: String) throws -> [Service.Dependency] {
         if node.null != nil { return [] }
         if let mapping = node.mapping {
-            var dependencies: [String] = []
+            var dependencies: [Service.Dependency] = []
             for (keyNode, valueNode) in mapping {
                 guard let key = keyNode.scalar?.string else { continue }
-                dependencies.append(key)
-                guard valueNode.null == nil, let settings = valueNode.mapping else { continue }
-                let condition = settings["condition"]?.scalar?.string ?? "service_started"
-                if condition != "service_started" {
-                    noteForm(
-                        key: "depends_on",
-                        service: service,
-                        node: valueNode,
-                        severity: .behavioural,
-                        reason: "`\(key)` is waited on with `\(condition)`, and without health reporting the only "
-                            + "condition that can be honoured is `service_started`"
-                    )
+                var condition = Service.Dependency.Condition.started
+                if valueNode.null == nil, let conditionNode = valueNode.mapping?["condition"] {
+                    let text = try string(conditionNode, path: "\(path).\(key).condition")
+                    guard let parsed = Service.Dependency.Condition(rawValue: text) else {
+                        throw ParseError(
+                            reason: .invalidValue,
+                            problem: "`\(text)` is not a `depends_on` condition; compose knows "
+                                + Service.Dependency.Condition.allCases.map { "`\($0.rawValue)`" }.joined(separator: ", "),
+                            mark: mark(conditionNode),
+                            path: "\(path).\(key).condition"
+                        )
+                    }
+                    condition = parsed
                 }
+                dependencies.append(Service.Dependency(key, condition: condition))
             }
             return dependencies
         }
-        var dependencies: [String] = []
+        var dependencies: [Service.Dependency] = []
         for (index, element) in try sequence(node, path: path).enumerated() {
-            dependencies.append(try string(element, path: "\(path)[\(index)]"))
+            dependencies.append(Service.Dependency(try string(element, path: "\(path)[\(index)]")))
         }
         return dependencies
     }

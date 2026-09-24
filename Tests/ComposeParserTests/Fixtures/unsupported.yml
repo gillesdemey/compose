@@ -5,8 +5,8 @@ services:
     cap_add: [NET_ADMIN]
     profiles: [debug]
     platform: linux/arm64
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost"]
+    ulimits:
+      nofile: 1024
     privileged: true
     ports:
       - "3000"

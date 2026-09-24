@@ -90,7 +90,7 @@ struct ExtendsTests {
             Service.Mount(source: .bind("/project/other"), target: "/data", readOnly: true),
         ])
         #expect(cli.dns == ["1.1.1.1", "8.8.8.8"])
-        #expect(cli.dependsOn == ["db", "cache"])
+        #expect(cli.dependsOn.map(\.service) == ["db", "cache"])
     }
 
     @Test("Inline environment beats env_file whichever level wrote either")

@@ -55,8 +55,8 @@ The dividing line is what container's own create surface can already express.
 
 **Supported:** `image`, `build`, `container_name`, `command`, `entrypoint`, `user`,
 `environment`, `env_file`, `working_dir`, `ports`, bind and tmpfs `volumes`, `tmpfs`, `labels`,
-`networks`, `dns`, `dns_search`, `dns_opt`, `deploy.resources`, `depends_on` in its list form,
-`extends`, and `include`.
+`networks`, `dns`, `dns_search`, `dns_opt`, `deploy.resources`, `healthcheck`, `depends_on`
+with all three conditions, `extends`, and `include`.
 
 `extends` merges by the Compose Specification's rules, and paths in a base file resolve
 against that file's directory. Each `include` entry is read as a project of its own, with its
@@ -65,27 +65,33 @@ supported. Where compose keeps whichever of two different definitions of one nam
 first, this refuses the file instead, naming both places. A problem in an included or
 extended file is reported against that file.
 
-**Not yet:** named `volumes`, attaching to multiple networks, `profiles`, `healthcheck`,
-`depends_on` with conditions, and the `!reset` and `!override` merge tags. `pull_policy` and
-`platform` are read but not honoured: an image is pulled when it is missing, and everything on
-this stack is linux/arm64.
+The runtime reports no health, so `up` runs a `healthcheck` itself, inside the container the
+way `container exec` would, for any service another one waits on with `service_healthy`. It
+follows compose's rules: probes every `start_interval` during `start_period` with failures
+not counted, then every `interval`, and `retries` failures in a row fails the `up`.
+`service_completed_successfully` waits for the container's process to exit, and fails the
+`up` unless it exits 0. Nothing watches health once `up` has returned. A service waited on
+with `service_healthy` needs its own `healthcheck` in the file: an image's HEALTHCHECK is not
+in the image config this reads.
+
+**Not yet:** named `volumes`, attaching to multiple networks, `profiles`, and the `!reset` and
+`!override` merge tags. `pull_policy` and `platform` are read but not honoured: an image is
+pulled when it is missing, and everything on this stack is linux/arm64.
 
 **Not possible today:** `restart`, `cap_add`, `devices`, `ulimits`, `secrets`, `configs`,
-`extra_hosts`, `privileged`, `network_mode`. These need runtime support
-container does not have. Restart policy is tracked upstream at
-[#2142](https://github.com/apple/container/issues/2142), health at
-[#1502](https://github.com/apple/container/issues/1502).
+`extra_hosts`, `privileged`, `network_mode`. These need runtime support container does not
+have. Restart policy is tracked upstream at
+[#2142](https://github.com/apple/container/issues/2142).
 
 Unsupported keys are never silently ignored. Quietly dropping `restart: always` would leave
 someone believing their database comes back after a crash. The plugin refuses a file it
 cannot honour, naming the key, the service and the line. Orchard lists what it would ignore,
 lets you decide, and keeps showing it on the project afterwards.
 
-Two limitations worth stating up front. Without health reporting in the runtime, `up` starts
-dependencies before dependents but does not wait for them to become ready. And a service
-does not answer to its service name: hostnames have to be unique across every container on
-the machine, so a container is reachable as `<project>-<service>` rather than as `db`.
-Compose's own naming needs per-network namespacing, which is
+One limitation worth stating up front: a service does not answer to its service name.
+Hostnames have to be unique across every container on the machine, so a container is
+reachable as `<project>-<service>` rather than as `db`. Compose's own naming needs
+per-network namespacing, which is
 [apple/container#1809](https://github.com/apple/container/issues/1809).
 
 ## Using it

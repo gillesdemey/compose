@@ -70,10 +70,13 @@ public enum ComposeFileRenderer {
             pairs.append(("deploy", mapping([("resources", mapping([("limits", mapping(limits))]))])))
         }
         if !service.dependsOn.isEmpty {
-            // The list form is all this reads, and it means what compose means by it: start
-            // after, and fail if the dependency is not in the project.
-            pairs.append(("depends_on", mapping(service.dependsOn.sorted().map { name in
-                (name, mapping([("condition", string("service_started")), ("required", boolean(true))]))
+            // `required: true` because that is what this reads every dependency as: a missing
+            // one refuses the file.
+            pairs.append(("depends_on", mapping(service.dependsOn.sorted { $0.service < $1.service }.map { dependency in
+                (dependency.service, mapping([
+                    ("condition", string(dependency.condition.rawValue)),
+                    ("required", boolean(true)),
+                ]))
             })))
         }
         if !service.dns.isEmpty { pairs.append(("dns", strings(service.dns))) }
@@ -81,6 +84,7 @@ public enum ComposeFileRenderer {
         if !service.dnsSearch.isEmpty { pairs.append(("dns_search", strings(service.dnsSearch))) }
         if let entrypoint = service.entrypoint { pairs.append(("entrypoint", strings(entrypoint))) }
         if !service.environment.isEmpty { pairs.append(("environment", stringMap(service.environment))) }
+        if let healthcheck = service.healthcheck { pairs.append(("healthcheck", node(for: healthcheck))) }
         if let image = service.image { pairs.append(("image", string(image))) }
         if !service.labels.isEmpty { pairs.append(("labels", stringMap(service.labels))) }
         let networks = service.networks.isEmpty ? ["default"] : service.networks
@@ -124,6 +128,39 @@ public enum ComposeFileRenderer {
         fields.append(("target", string(mount.target)))
         if mount.readOnly { fields.append(("read_only", boolean(true))) }
         return mapping(fields)
+    }
+
+    private static func node(for healthcheck: Service.Healthcheck) -> Node {
+        let test = healthcheck.test
+        let written = test.count == 3 && test[0] == "/bin/sh" && test[1] == "-c"
+            ? ["CMD-SHELL", test[2]]
+            : ["CMD"] + test
+        return mapping([
+            ("test", strings(written)),
+            ("interval", string(duration(healthcheck.interval))),
+            ("timeout", string(duration(healthcheck.timeout))),
+            ("retries", integer(healthcheck.retries)),
+            ("start_period", string(duration(healthcheck.startPeriod))),
+            ("start_interval", string(duration(healthcheck.startInterval))),
+        ])
+    }
+
+    /// Seconds in compose's own format, the way Go prints a duration: `1m30s`, `500ms`.
+    public static func duration(_ seconds: Double) -> String {
+        if seconds == 0 { return "0s" }
+        if seconds < 1 { return "\(trimmed(seconds * 1000))ms" }
+        var rest = seconds
+        var text = ""
+        let hours = Int(rest / 3600)
+        if hours > 0 { text += "\(hours)h"; rest -= Double(hours) * 3600 }
+        let minutes = Int(rest / 60)
+        if minutes > 0 || hours > 0 { text += "\(minutes)m"; rest -= Double(minutes) * 60 }
+        return text + "\(trimmed(rest))s"
+    }
+
+    private static func trimmed(_ value: Double) -> String {
+        let rounded = (value * 1000).rounded() / 1000
+        return rounded == rounded.rounded() ? String(Int(rounded)) : String(rounded)
     }
 
     private static func resource(name: String, driver: String?, isExternal: Bool, labels: [String: String]) -> Node {

@@ -23,6 +23,30 @@ struct ServiceLayer {
         }
     }
 
+    /// Merged field by field, as compose merges it, so every field stays unset until written.
+    struct Healthcheck {
+        var test: [String]?
+        var disabled: Bool?
+        var interval: Double?
+        var timeout: Double?
+        var retries: Int?
+        var startPeriod: Double?
+        var startInterval: Double?
+
+        /// `nil` when switched off, or when nothing names a test. Compose would fall back to
+        /// the image's own HEALTHCHECK there, which this cannot read.
+        var settled: Service.Healthcheck? {
+            guard disabled != true, let test, !test.isEmpty else { return nil }
+            var result = Service.Healthcheck(test: test)
+            if let interval { result.interval = interval }
+            if let timeout { result.timeout = timeout }
+            if let retries { result.retries = retries }
+            if let startPeriod { result.startPeriod = startPeriod }
+            if let startInterval { result.startInterval = startInterval }
+            return result
+        }
+    }
+
     /// Every key the layer wrote, so a merge knows which findings a higher layer overrode.
     var keys: Set<String> = []
     var image: String?
@@ -44,7 +68,8 @@ struct ServiceLayer {
     var dnsSearch: [String] = []
     var dnsOptions: [String] = []
     var resources: Service.Resources?
-    var dependsOn: [String] = []
+    var healthcheck: Healthcheck?
+    var dependsOn: [Service.Dependency] = []
     var extensions: [String: ExtensionValue] = [:]
     /// What this layer asked for and will not get. Held here rather than reported, because a
     /// higher layer can still replace the key.
@@ -88,7 +113,13 @@ struct ServiceLayer {
         result.dnsSearch = dnsSearch + over.dnsSearch
         result.dnsOptions = dnsOptions + over.dnsOptions
         result.resources = Self.merge(resources, over.resources)
-        result.dependsOn = Self.unique(dependsOn + over.dependsOn)
+        result.healthcheck = Self.merge(healthcheck, over.healthcheck)
+        // A mapping keyed by service, so the higher layer's condition wins and the order is
+        // the base's, then whatever the higher layer adds.
+        let overridden = Dictionary(over.dependsOn.map { ($0.service, $0) }, uniquingKeysWith: { $1 })
+        let inherited = dependsOn.map { overridden[$0.service] ?? $0 }
+        let inheritedNames = Set(inherited.map(\.service))
+        result.dependsOn = inherited + over.dependsOn.filter { !inheritedNames.contains($0.service) }
         result.extensions = extensions.merging(over.extensions) { $1 }
         let replaced = over.keys.intersection(Self.replacedKeys)
         result.findings = findings.filter { finding in
@@ -114,6 +145,20 @@ struct ServiceLayer {
         guard let base else { return over }
         guard let over else { return base }
         return Service.Resources(cpus: over.cpus ?? base.cpus, memoryBytes: over.memoryBytes ?? base.memoryBytes)
+    }
+
+    private static func merge(_ base: Healthcheck?, _ over: Healthcheck?) -> Healthcheck? {
+        guard let base else { return over }
+        guard let over else { return base }
+        return Healthcheck(
+            test: over.test ?? base.test,
+            disabled: over.disabled ?? base.disabled,
+            interval: over.interval ?? base.interval,
+            timeout: over.timeout ?? base.timeout,
+            retries: over.retries ?? base.retries,
+            startPeriod: over.startPeriod ?? base.startPeriod,
+            startInterval: over.startInterval ?? base.startInterval
+        )
     }
 
     private static func unique<T: Hashable>(_ items: [T]) -> [T] {
@@ -278,6 +323,7 @@ extension FileParser {
             dnsSearch: layer.dnsSearch,
             dnsOptions: layer.dnsOptions,
             resources: layer.resources,
+            healthcheck: layer.healthcheck?.settled,
             dependsOn: layer.dependsOn,
             extensions: layer.extensions
         )
