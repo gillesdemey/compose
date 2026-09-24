@@ -1,6 +1,7 @@
 import Foundation
 
-/// The parser's entire contact with the disk: `.env` and `env_file`.
+/// The parser's entire contact with the disk: `.env`, `env_file`, and the files `include`
+/// and `extends` name.
 ///
 /// It is a protocol so that a test can hand the parser a file set without writing anything to
 /// a temporary directory, and so that an application embedding this can read files through

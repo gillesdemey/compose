@@ -5,55 +5,66 @@ import Yams
 // One service, key by key.
 
 extension FileParser {
-    mutating func parseService(name: String, node: Node) throws -> Service {
-        var service = Service(name: name)
+    /// One service as a single file writes it, with nothing filled in from anywhere else.
+    ///
+    /// The `extends` node comes back untouched, for `serviceLayer` to follow. Findings raised
+    /// here go into the layer rather than the parse, because a higher layer can still replace
+    /// the key they are about.
+    mutating func parseLayer(name: String, node: Node) throws -> (layer: ServiceLayer, extends: Node?) {
+        var layer = ServiceLayer(mark: mark(node))
+        var extendsNode: Node?
         let base = "services.\(name)"
-        var fromEnvFiles: [(key: String, value: String)] = []
-        var inline: [(key: String, value: String)] = []
+        let findingsBefore = findings.count
 
         for (keyNode, valueNode) in try mapping(node, path: base) {
             guard let key = keyNode.scalar?.string else {
                 throw ParseError(reason: .wrongShape, problem: "service keys must be plain strings", mark: mark(keyNode))
             }
+            layer.keys.insert(key)
             if KeySupportTable.isExtensionKey(key) {
-                service.extensions[key] = extensionValue(valueNode)
+                layer.extensions[key] = extensionValue(valueNode)
                 continue
             }
             switch key {
+            case "extends":
+                extendsNode = valueNode
             case "image":
-                service.image = try string(valueNode, path: "\(base).image")
+                layer.image = try string(valueNode, path: "\(base).image")
             case "build":
-                service.build = try parseBuild(valueNode, service: name, path: "\(base).build")
+                layer.build = try parseBuild(valueNode, service: name, path: "\(base).build")
             case "container_name":
                 let container = try string(valueNode, path: "\(base).container_name")
                 try validateName(container, kind: "container", node: valueNode)
-                service.containerName = container
+                layer.containerName = container
             case "command":
-                service.command = try parseCommand(valueNode, path: "\(base).command")
+                layer.command = try parseCommand(valueNode, path: "\(base).command")
             case "environment":
-                inline = try parseEnvironment(valueNode, path: "\(base).environment")
+                for pair in try parseEnvironment(valueNode, path: "\(base).environment") {
+                    layer.environment[pair.key] = pair.value
+                }
             case "env_file":
-                fromEnvFiles = try parseEnvFiles(valueNode, path: "\(base).env_file")
+                layer.fromEnvFiles = try parseEnvFiles(valueNode, path: "\(base).env_file")
             case "working_dir":
-                service.workingDirectory = try string(valueNode, path: "\(base).working_dir")
+                layer.workingDirectory = try string(valueNode, path: "\(base).working_dir")
             case "ports":
-                service.ports = try parsePorts(valueNode, service: name, path: "\(base).ports")
+                layer.ports = try parsePorts(valueNode, service: name, path: "\(base).ports")
             case "volumes":
-                service.mounts = try parseMounts(valueNode, service: name, path: "\(base).volumes")
+                layer.mounts = try parseMounts(valueNode, service: name, path: "\(base).volumes")
             case "labels":
-                service.labels = try parseLabels(valueNode, service: name, path: "\(base).labels")
+                layer.labels = try parseLabels(valueNode, service: name, path: "\(base).labels")
             case "networks":
-                service.networks = try parseServiceNetworks(valueNode, service: name, path: "\(base).networks")
+                layer.networks = try parseServiceNetworks(valueNode, service: name, path: "\(base).networks")
+                layer.networksMark = mark(valueNode)
             case "dns":
-                service.dns = try parseStringOrList(valueNode, path: "\(base).dns")
+                layer.dns = try parseStringOrList(valueNode, path: "\(base).dns")
             case "dns_search":
-                service.dnsSearch = try parseStringOrList(valueNode, path: "\(base).dns_search")
+                layer.dnsSearch = try parseStringOrList(valueNode, path: "\(base).dns_search")
             case "dns_opt":
-                service.dnsOptions = try parseStringOrList(valueNode, path: "\(base).dns_opt")
+                layer.dnsOptions = try parseStringOrList(valueNode, path: "\(base).dns_opt")
             case "deploy":
-                service.resources = try parseDeploy(valueNode, service: name, path: "\(base).deploy")
+                layer.resources = try parseDeploy(valueNode, service: name, path: "\(base).deploy")
             case "depends_on":
-                service.dependsOn = try parseDependsOn(valueNode, service: name, path: "\(base).depends_on")
+                layer.dependsOn = try parseDependsOn(valueNode, service: name, path: "\(base).depends_on")
             case "restart":
                 // The only restart policy this stack has is the absence of one, so `no` is
                 // honoured exactly, by doing nothing. Reporting it would be reporting
@@ -80,39 +91,26 @@ extension FileParser {
             }
         }
 
-        // `env_file` first, then `environment`, because the inline block is the one written
-        // next to the service and has to win.
-        var environment: [String: String] = [:]
-        for pair in fromEnvFiles { environment[pair.key] = pair.value }
-        for pair in inline { environment[pair.key] = pair.value }
-        service.environment = environment
-
-        guard service.image != nil || service.build != nil else {
-            throw ParseError(
-                reason: .missingKey,
-                problem: "service `\(name)` has neither `image` nor `build`",
-                mark: mark(node),
-                path: base
-            )
-        }
-        return service
+        layer.findings = Array(findings[findingsBefore...])
+        findings.removeSubrange(findingsBefore...)
+        return (layer, extendsNode)
     }
 
     // MARK: - build
 
-    private mutating func parseBuild(_ node: Node, service: String, path: String) throws -> Service.Build {
+    private mutating func parseBuild(_ node: Node, service: String, path: String) throws -> ServiceLayer.Build {
         if node.mapping == nil {
             let context = try string(node, path: path)
-            return Service.Build(context: resolvePath(context, relativeTo: options.projectDirectory))
+            return ServiceLayer.Build(context: resolvePath(context, relativeTo: directory), defaultContext: directory)
         }
-        var build = Service.Build(context: options.projectDirectory)
+        var build = ServiceLayer.Build(defaultContext: directory)
         for (keyNode, valueNode) in try mapping(node, path: path) {
             let key = keyNode.scalar?.string ?? ""
             switch key {
             case "context":
                 build.context = resolvePath(
                     try string(valueNode, path: "\(path).context"),
-                    relativeTo: options.projectDirectory
+                    relativeTo: directory
                 )
             case "dockerfile":
                 build.dockerfile = try string(valueNode, path: "\(path).dockerfile")
@@ -212,7 +210,7 @@ extension FileParser {
 
         var pairs: [(key: String, value: String)] = []
         for entry in entries {
-            let resolved = resolvePath(entry.path, relativeTo: options.projectDirectory)
+            let resolved = resolvePath(entry.path, relativeTo: directory)
             guard options.fileSystem.fileExists(atPath: resolved) else {
                 if entry.required {
                     throw ParseError(
@@ -476,7 +474,7 @@ extension FileParser {
             let source = parts[0]
             let isPath = source.hasPrefix("/") || source.hasPrefix(".") || source.hasPrefix("~")
             return Service.Mount(
-                source: isPath ? .bind(resolvePath(source, relativeTo: options.projectDirectory)) : .named(source),
+                source: isPath ? .bind(resolvePath(source, relativeTo: directory)) : .named(source),
                 target: parts[1],
                 readOnly: modes.contains("ro")
             )
@@ -516,7 +514,7 @@ extension FileParser {
                 throw ParseError(reason: .missingKey, problem: "a bind mount needs a `source`", mark: mark(node), path: path)
             }
             return Service.Mount(
-                source: .bind(resolvePath(source, relativeTo: options.projectDirectory)),
+                source: .bind(resolvePath(source, relativeTo: directory)),
                 target: target,
                 readOnly: readOnly
             )
@@ -541,7 +539,7 @@ extension FileParser {
 
     /// `dns`, `dns_search` and `dns_opt` each take a bare string or a list of them, which is
     /// the short and long form compose uses throughout.
-    private mutating func parseStringOrList(_ node: Node, path: String) throws -> [String] {
+    mutating func parseStringOrList(_ node: Node, path: String) throws -> [String] {
         if node.null != nil { return [] }
         if node.sequence != nil {
             return try sequence(node, path: path).enumerated().map { index, element in
@@ -576,15 +574,6 @@ extension FileParser {
             for (index, element) in try sequence(node, path: path).enumerated() {
                 networks.append(try string(element, path: "\(path)[\(index)]"))
             }
-        }
-        if networks.count > 1 {
-            noteForm(
-                key: "networks",
-                service: service,
-                node: node,
-                severity: .behavioural,
-                reason: "a container joins one network, so only `\(networks[0])` is attached"
-            )
         }
         return networks
     }

@@ -23,8 +23,12 @@ public struct ParseError: Error, Sendable, Equatable, CustomStringConvertible {
         case missingKey
         /// `${VAR:?message}` with the variable unset.
         case requiredVariableUnset
-        /// An `env_file` the file names and the disk does not have.
+        /// An `env_file`, `include` or `extends` file the disk does not have.
         case unreadableFile
+        /// Two files reached through `include` define the same name differently.
+        case conflictingDefinition
+        /// An `include` or `extends` chain that leads back to where it started.
+        case circularReference
     }
 
     public let reason: Reason
@@ -45,23 +49,24 @@ public struct ParseError: Error, Sendable, Equatable, CustomStringConvertible {
     /// The line a front end prints: location, path, problem.
     public var description: String {
         var text = ""
-        if let mark { text += "\(mark.line):\(mark.column): " }
+        if let mark { text += "\(mark): " }
         text += problem
         if let path { text += " (at \(path))" }
         return text
     }
 
     /// Wrap a libYAML failure, keeping its mark so the location survives.
-    static func yaml(_ error: YamlError) -> ParseError {
+    static func yaml(_ error: YamlError, file: String? = nil) -> ParseError {
         switch error {
         case let .scanner(_, problem, mark, _), let .parser(_, problem, mark, _), let .composer(_, problem, mark, _):
             return ParseError(
                 reason: .malformedYAML,
                 problem: problem,
-                mark: SourceMark(line: mark.line, column: mark.column)
+                mark: SourceMark(line: mark.line, column: mark.column, file: file)
             )
         default:
-            return ParseError(reason: .malformedYAML, problem: String(describing: error))
+            let problem = String(describing: error)
+            return ParseError(reason: .malformedYAML, problem: file.map { "`\($0)`: \(problem)" } ?? problem)
         }
     }
 }

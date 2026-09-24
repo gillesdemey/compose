@@ -89,16 +89,14 @@ public enum KeySupportTable {
             severity: .behavioural,
             reason: "container has no secret mounting"
         ),
-        "include": .deferred(
-            severity: .behavioural,
-            reason: "composing a project from several files is not implemented yet"
-        ),
+        "include": .supported,
     ]
 
     /// Keys valid under a single service.
     public static let service: [String: KeySupport] = [
         "image": .supported,
         "build": .supported,
+        "extends": .supported,
         "container_name": .supported,
         "command": .supported,
         "environment": .supported,
@@ -163,17 +161,26 @@ public enum KeySupportTable {
     }
 }
 
-/// A point in the source file, one-based, as libYAML counts them.
+/// A point in a source file, one-based, as libYAML counts them.
 public struct SourceMark: Sendable, Equatable, Hashable, CustomStringConvertible {
     public let line: Int
     public let column: Int
+    /// The file the point is in, when it is not the file the parse started from: one reached
+    /// through `include` or `extends`. Relative to the starting file's directory when it sits
+    /// under it, absolute otherwise. `nil` means the starting file, whose name the caller
+    /// already has.
+    public let file: String?
 
-    public init(line: Int, column: Int) {
+    public init(line: Int, column: Int, file: String? = nil) {
         self.line = line
         self.column = column
+        self.file = file
     }
 
-    public var description: String { "\(line):\(column)" }
+    public var description: String {
+        if let file { return "\(file):\(line):\(column)" }
+        return "\(line):\(column)"
+    }
 }
 
 /// Something in the file this implementation will not act on, recorded rather than dropped.
@@ -230,7 +237,7 @@ public struct Finding: Sendable, Equatable, Identifiable, Hashable {
     /// have to show and the plugin has to print.
     public var message: String {
         var text = ""
-        if let mark { text += "\(mark.line):\(mark.column): " }
+        if let mark { text += "\(mark): " }
         text += "`\(key)`"
         if let service { text += " in service `\(service)`" }
         switch kind {

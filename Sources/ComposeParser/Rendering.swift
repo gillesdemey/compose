@@ -3,8 +3,9 @@ import Foundation
 import Yams
 
 /// A resolved `ComposeFile` written back out as compose YAML, the way `docker compose config`
-/// shows a project: variables substituted, `env_file` merged in, paths absolute, short forms
-/// expanded, and the implicit default network written down.
+/// shows a project: every `include` and `extends` merged, variables substituted, `env_file`
+/// merged in, paths absolute, short forms expanded, and the implicit default network written
+/// down.
 ///
 /// It shows what this implementation will act on, which is less than the file asked for: a
 /// key reported as a finding is not in the model, so it is not in the output either. Keys

@@ -55,10 +55,18 @@ The dividing line is what container's own create surface can already express.
 
 **Supported:** `image`, `build`, `container_name`, `command`, `environment`, `env_file`,
 `working_dir`, `ports`, bind `volumes`, `labels`, `networks`, `dns`, `dns_search`,
-`dns_opt`, `deploy.resources`, and `depends_on` in its list form.
+`dns_opt`, `deploy.resources`, `depends_on` in its list form, `extends`, and `include`.
+
+`extends` merges by the Compose Specification's rules, and paths in a base file resolve
+against that file's directory. Each `include` entry is read as a project of its own, with its
+own directory and `.env`; its long form, including a list of paths merged in order, is
+supported. Where compose keeps whichever of two different definitions of one name it met
+first, this refuses the file instead, naming both places. A problem in an included or
+extended file is reported against that file.
 
 **Not yet:** `entrypoint`, named `volumes`, attaching to multiple networks, `profiles`,
-`include`, `healthcheck`, and `depends_on` with conditions. `pull_policy` and `platform` are
+`healthcheck`, `depends_on` with conditions, and the `!reset` and `!override` merge tags.
+`pull_policy` and `platform` are
 read but not honoured: an image is pulled when it is missing, and everything on this stack is
 linux/arm64.
 
@@ -121,11 +129,11 @@ also takes `--force-recreate`, `--pull missing|always|never` and `--keep-orphans
 `--keep-networks`; `config` takes `--services` to print only the service names.
 
 `config` prints the project the way `docker compose config` does, as a compose file with
-variables substituted, `env_file` merged in, paths absolute, short forms expanded and the
-default network written out. It prints what this will act on, which is not always everything
-the file asked for: a key it cannot honour is missing from the output and listed on stderr
-instead, and `config` never refuses. Its output reads back as a compose file, to this and to
-compose.
+every `include` and `extends` merged, variables substituted, `env_file` merged in, paths
+absolute, short forms expanded and the default network written out. It prints what this will
+act on, which is not always everything the file asked for: a key it cannot honour is missing
+from the output and listed on stderr instead, and `config` never refuses. Its output reads
+back as a compose file, to this and to compose.
 
 Running `up` twice is the interesting case. The second run compares each service against the
 hash stamped on the container it produced, and creates, starts, leaves alone, recreates or
